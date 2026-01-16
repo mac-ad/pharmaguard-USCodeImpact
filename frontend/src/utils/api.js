@@ -1,4 +1,4 @@
-const API_BASE = 'http://192.168.1.84:3001'
+export const API_BASE = '/api'
 
 export async function createBatch(data) {
   const response = await fetch(`${API_BASE}/batch`, {

@@ -23,18 +23,62 @@ export default function Checkpoint() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
 
   // QR Scanner
-  const handleQRResult = useCallback(async (data) => {
+  // QR Scanner
+  const handleQRResult = useCallback(async (data, rawText, videoElement) => {
     if (data.type === 'BATCH' && data.batchId) {
+      // 1. Analyze color IMMEDIATELY from the current frame
+      let colorResult = { color: 'unknown' }
       try {
+        if (videoElement) {
+          colorResult = analyzeVideoFrame(videoElement)
+        }
+      } catch (e) {
+        console.error('Color analysis failed', e)
+      }
+
+      // Stop scanning
+      qrScanner.stopScanning()
+
+      try {
+        // 2. Fetch batch details
         const batch = await getBatch(data.batchId)
         setScannedBatch(batch)
-        qrScanner.stopScanning()
-        setStep('scanSticker')
+        setDetectedColor(colorResult)
+
+        // 3. Get Geolocation
+        let latitude = null
+        let longitude = null
+        try {
+          const pos = await new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3000 })
+          })
+          latitude = pos.coords.latitude
+          longitude = pos.coords.longitude
+        } catch (e) {
+          console.warn('Geolocation failed or timed out', e)
+        }
+
+        // 4. Estimate Temperature
+        const tempMap = { green: 22, yellow: 32, red: 45 }
+        const estimatedTemp = tempMap[colorResult.color] || 25
+
+        // 5. Log scan result
+        const result = await logScan({
+          batchId: batch.batchId,
+          checkpoint: CHECKPOINTS[currentCheckpoint],
+          stickerColor: colorResult.color,
+          latitude,
+          longitude,
+          temperature: estimatedTemp
+        })
+
+        setScanResult(result)
+        setStep('result')
       } catch (err) {
-        setError('Batch not found: ' + data.batchId)
+        setError('Processing failed: ' + err.message)
       }
     }
-  }, [])
+  }, [currentCheckpoint])
 
   const qrScanner = useQRScanner(handleQRResult)
   const camera = useCamera()
@@ -48,79 +92,7 @@ export default function Checkpoint() {
     }, 100)
   }
 
-  // Start sticker color scanning
-  const startStickerScan = () => {
-    setError(null)
-    camera.startCamera()
-  }
 
-  // Analyze sticker color
-  const analyzeSticker = async () => {
-    if (!camera.isActive) return
-    
-    setIsAnalyzing(true)
-    
-    try {
-      // Capture and analyze multiple frames for better accuracy
-      let results = []
-      for (let i = 0; i < 5; i++) {
-        await new Promise(r => setTimeout(r, 100))
-        const result = analyzeVideoFrame(camera.videoRef.current)
-        if (result.color !== 'unknown') {
-          results.push(result)
-        }
-      }
-      
-      // Get most common color
-      if (results.length > 0) {
-        const colorCounts = results.reduce((acc, r) => {
-          acc[r.color] = (acc[r.color] || 0) + 1
-          return acc
-        }, {})
-        
-        const dominantColor = Object.entries(colorCounts)
-          .sort((a, b) => b[1] - a[1])[0][0]
-        
-        const avgConfidence = Math.round(
-          results.filter(r => r.color === dominantColor)
-            .reduce((sum, r) => sum + r.confidence, 0) / 
-          results.filter(r => r.color === dominantColor).length
-        )
-        
-        setDetectedColor({
-          color: dominantColor,
-          confidence: avgConfidence,
-          ...getColorInfo(dominantColor)
-        })
-        
-        // Log the scan
-        await submitScan(dominantColor)
-      } else {
-        setError('Could not detect sticker color. Please ensure the sticker is visible in the camera.')
-      }
-    } catch (err) {
-      setError('Analysis failed: ' + err.message)
-    } finally {
-      setIsAnalyzing(false)
-    }
-  }
-
-  // Submit scan to backend
-  const submitScan = async (color) => {
-    try {
-      const result = await logScan({
-        batchId: scannedBatch.batchId,
-        checkpoint: CHECKPOINTS[currentCheckpoint],
-        stickerColor: color
-      })
-      
-      setScanResult(result)
-      camera.stopCamera()
-      setStep('result')
-    } catch (err) {
-      setError('Failed to log scan: ' + err.message)
-    }
-  }
 
   // Reset and scan next
   const resetForNext = () => {
@@ -162,15 +134,15 @@ export default function Checkpoint() {
                     startQRScan()
                   }}
                   className="btn btn-outline"
-                  style={{ 
+                  style={{
                     justifyContent: 'flex-start',
                     padding: '1rem 1.25rem'
                   }}
                 >
-                  <span style={{ 
-                    width: 28, 
-                    height: 28, 
-                    borderRadius: '50%', 
+                  <span style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
                     background: 'var(--accent)',
                     display: 'flex',
                     alignItems: 'center',
@@ -191,36 +163,39 @@ export default function Checkpoint() {
         {step === 'scanQR' && (
           <div className="card">
             <div className="flex-between mb-2">
-              <h3>Scan Batch QR</h3>
+              <h3>Scan QR & Sticker</h3>
               <span className="status-badge status-warning">
                 {CHECKPOINTS[currentCheckpoint]}
               </span>
             </div>
-            
+
             <div className="camera-container">
-              <video 
-                ref={qrScanner.videoRef} 
+              <video
+                ref={qrScanner.videoRef}
                 className="camera-video"
                 playsInline
                 muted
               />
               <div className="camera-overlay"></div>
               <div className="camera-status">
-                {qrScanner.isScanning ? '📷 Scanning for QR code...' : 'Initializing camera...'}
+                {qrScanner.isScanning ? '📷 Scanning for QR & Sticker...' : 'Initializing camera...'}
               </div>
+              <p className="text-center text-muted mt-2" style={{ fontSize: '0.85rem' }}>
+                Ensure both the QR Code and Temperature Sticker are visible in the frame.
+              </p>
             </div>
 
             {error && (
-              <div className="card mt-2" style={{ 
-                background: 'rgba(239, 68, 68, 0.1)', 
+              <div className="card mt-2" style={{
+                background: 'rgba(239, 68, 68, 0.1)',
                 border: '1px solid rgba(239, 68, 68, 0.3)'
               }}>
                 <p className="text-danger">{error}</p>
               </div>
             )}
 
-            <button 
-              onClick={resetForNext} 
+            <button
+              onClick={resetForNext}
               className="btn btn-outline btn-block mt-2"
             >
               ← Back to Checkpoints
@@ -228,88 +203,7 @@ export default function Checkpoint() {
           </div>
         )}
 
-        {/* Sticker Color Scanning */}
-        {step === 'scanSticker' && (
-          <div className="card">
-            <div className="flex-between mb-2">
-              <h3>Scan Temperature Sticker</h3>
-              <span className="status-badge status-warning">
-                {CHECKPOINTS[currentCheckpoint]}
-              </span>
-            </div>
 
-            <div style={{ 
-              background: 'var(--bg-secondary)', 
-              borderRadius: 'var(--radius-md)', 
-              padding: '1rem',
-              marginBottom: '1rem'
-            }}>
-              <p className="text-muted" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>BATCH</p>
-              <p className="mono" style={{ fontWeight: 600 }}>{scannedBatch?.batchId}</p>
-              <p className="text-secondary" style={{ fontSize: '0.875rem' }}>{scannedBatch?.medicineName}</p>
-            </div>
-
-            <div className="camera-container">
-              <video 
-                ref={camera.videoRef} 
-                className="camera-video"
-                playsInline
-                muted
-                autoPlay
-              />
-              <div className="camera-overlay" style={{ borderColor: 
-                detectedColor?.color === 'green' ? 'var(--safe)' :
-                detectedColor?.color === 'yellow' ? 'var(--warning)' :
-                detectedColor?.color === 'red' ? 'var(--danger)' : 'var(--accent)'
-              }}></div>
-              <div className="camera-status">
-                {camera.isActive ? '🌡️ Point at temperature sticker' : 'Starting camera...'}
-              </div>
-            </div>
-
-            {!camera.isActive && (
-              <button 
-                onClick={startStickerScan} 
-                className="btn btn-primary btn-block mt-2"
-              >
-                📷 Start Camera
-              </button>
-            )}
-
-            {camera.isActive && (
-              <button 
-                onClick={analyzeSticker}
-                disabled={isAnalyzing}
-                className="btn btn-safe btn-lg btn-block mt-2"
-              >
-                {isAnalyzing ? (
-                  <>
-                    <span className="loader" style={{ width: 20, height: 20, borderWidth: 2 }}></span>
-                    Analyzing...
-                  </>
-                ) : (
-                  <>🎯 Capture & Analyze Sticker</>
-                )}
-              </button>
-            )}
-
-            {error && (
-              <div className="card mt-2" style={{ 
-                background: 'rgba(239, 68, 68, 0.1)', 
-                border: '1px solid rgba(239, 68, 68, 0.3)'
-              }}>
-                <p className="text-danger">{error}</p>
-              </div>
-            )}
-
-            <button 
-              onClick={resetForNext} 
-              className="btn btn-outline btn-block mt-2"
-            >
-              ← Cancel
-            </button>
-          </div>
-        )}
 
         {/* Result */}
         {step === 'result' && scanResult && (
@@ -334,9 +228,9 @@ export default function Checkpoint() {
               </>
             )}
 
-            <div style={{ 
-              background: 'var(--bg-secondary)', 
-              borderRadius: 'var(--radius-md)', 
+            <div style={{
+              background: 'var(--bg-secondary)',
+              borderRadius: 'var(--radius-md)',
               padding: '1rem',
               margin: '1.5rem 0'
             }}>
@@ -385,8 +279,8 @@ export default function Checkpoint() {
               </div>
             )}
 
-            <button 
-              onClick={resetForNext} 
+            <button
+              onClick={resetForNext}
               className="btn btn-primary btn-lg btn-block"
             >
               Scan Another Batch

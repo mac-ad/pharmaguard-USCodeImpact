@@ -1,174 +1,188 @@
 /**
- * Color Detection Utility
- * Analyzes an image to detect the dominant color of a temperature sticker
- * Uses RGB/HSV color space analysis
+ * Advanced Color Detection Utility
+ * Uses K-Means Clustering (Unsupervised ML) to robustly identify
+ * temperature sticker colors under varying lighting conditions.
  */
 
-// Color thresholds for sticker detection
+// Color thresholds for sticker detection - Gaps closed for better detection
 const COLOR_RANGES = {
-  green: {
-    hueMin: 80,
-    hueMax: 160,
-    satMin: 30,
-    valMin: 30
-  },
-  yellow: {
-    hueMin: 35,
-    hueMax: 70,
-    satMin: 40,
-    valMin: 40
-  },
-  red: {
-    hueMin: 0,
-    hueMax: 25,
-    hueMin2: 340, // Red wraps around
-    hueMax2: 360,
-    satMin: 40,
-    valMin: 30
-  }
+  green: { hueMin: 75, hueMax: 170 },
+  yellow: { hueMin: 30, hueMax: 75 },
+  red: { hueMin: 0, hueMax: 30, hueMin2: 330, hueMax2: 360 }
 }
 
 /**
- * Convert RGB to HSV color space
+ * Convert RGB to HSV
  */
 function rgbToHsv(r, g, b) {
-  r /= 255
-  g /= 255
-  b /= 255
-
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const diff = max - min
-
-  let h = 0
-  let s = max === 0 ? 0 : diff / max
-  let v = max
-
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const diff = max - min;
+  
+  let h = 0, s = max === 0 ? 0 : diff / max, v = max;
+  
   if (diff !== 0) {
     switch (max) {
-      case r:
-        h = 60 * (((g - b) / diff) % 6)
-        break
-      case g:
-        h = 60 * ((b - r) / diff + 2)
-        break
-      case b:
-        h = 60 * ((r - g) / diff + 4)
-        break
+      case r: h = 60 * (((g - b) / diff) % 6); break;
+      case g: h = 60 * ((b - r) / diff + 2); break;
+      case b: h = 60 * ((r - g) / diff + 4); break;
     }
   }
-
-  if (h < 0) h += 360
-
-  return { h, s: s * 100, v: v * 100 }
+  if (h < 0) h += 360;
+  return { h, s: s * 100, v: v * 100 };
 }
 
 /**
- * Analyze image data and determine dominant color
- * @param {ImageData} imageData - Canvas image data
- * @returns {Object} - Detected color and confidence
+ * Classify a standard HSV value into Green/Yellow/Red
+ */
+function classifyHsv(hsv) {
+  // Lower threshold to catch darker/duller stickers in bad light
+  if (hsv.s < 15 || hsv.v < 15) return 'unknown';
+
+  if (hsv.h >= COLOR_RANGES.green.hueMin && hsv.h <= COLOR_RANGES.green.hueMax) {
+    return 'green';
+  }
+  if (hsv.h >= COLOR_RANGES.yellow.hueMin && hsv.h <= COLOR_RANGES.yellow.hueMax) {
+    return 'yellow';
+  }
+  if ((hsv.h >= COLOR_RANGES.red.hueMin && hsv.h <= COLOR_RANGES.red.hueMax) ||
+      (hsv.h >= COLOR_RANGES.red.hueMin2 && hsv.h <= COLOR_RANGES.red.hueMax2)) {
+    return 'red';
+  }
+  return 'unknown';
+}
+
+/**
+ * K-Means Clustering Implementation
+ */
+function runKMeans(pixels, k = 5, maxIterations = 5) {
+  if (pixels.length === 0) return [];
+
+  // 1. Initialize centroids randomly
+  let centroids = [];
+  for (let i = 0; i < k; i++) {
+    centroids.push({ ...pixels[Math.floor(Math.random() * pixels.length)] });
+  }
+
+  for (let iter = 0; iter < maxIterations; iter++) {
+    const clusters = Array(k).fill().map(() => []);
+    
+    // 2. Assign pixels to nearest centroid
+    pixels.forEach(p => {
+      let minDist = Infinity;
+      let clusterIdx = 0;
+      centroids.forEach((c, idx) => {
+        const dist = Math.sqrt(Math.pow(p.r - c.r, 2) + Math.pow(p.g - c.g, 2) + Math.pow(p.b - c.b, 2));
+        if (dist < minDist) {
+          minDist = dist;
+          clusterIdx = idx;
+        }
+      });
+      clusters[clusterIdx].push(p);
+    });
+
+    // 3. Recalculate centroids
+    centroids = clusters.map((cluster, i) => {
+      if (cluster.length === 0) return centroids[i]; // Keep old if empty
+      const sum = cluster.reduce((acc, p) => ({ r: acc.r + p.r, g: acc.g + p.g, b: acc.b + p.b }), { r: 0, g: 0, b: 0 });
+      return {
+        r: Math.round(sum.r / cluster.length),
+        g: Math.round(sum.g / cluster.length),
+        b: Math.round(sum.b / cluster.length),
+        count: cluster.length
+      };
+    });
+  }
+  return centroids;
+}
+
+/**
+ * Analyze image data using Machine Learning (K-Means)
  */
 export function analyzeImageData(imageData) {
-  const { data, width, height } = imageData
+  const { data, width, height } = imageData;
   
-  // Sample from center region (where sticker should be)
-  const centerX = Math.floor(width / 2)
-  const centerY = Math.floor(height / 2)
-  const sampleSize = Math.floor(Math.min(width, height) * 0.3) // 30% of image
+  // 1. Sample pixels from the center area (most relevant)
+  const samples = [];
+  const sampleCount = 4000; // Increased sampling
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const regionSize = Math.min(width, height) * 0.5; // 50% center crop (Expanded area)
   
-  const colorCounts = { red: 0, yellow: 0, green: 0, other: 0 }
-  let totalSamples = 0
-  
-  // Average RGB for visualization
-  let totalR = 0, totalG = 0, totalB = 0
+  for (let i = 0; i < sampleCount; i++) {
+    const x = Math.floor(centerX - regionSize/2 + Math.random() * regionSize);
+    const y = Math.floor(centerY - regionSize/2 + Math.random() * regionSize);
+    
+    if (x >= 0 && x < width && y >= 0 && y < height) {
+      const idx = (y * width + x) * 4;
+      samples.push({ r: data[idx], g: data[idx+1], b: data[idx+2] });
+    }
+  }
 
-  for (let y = centerY - sampleSize / 2; y < centerY + sampleSize / 2; y++) {
-    for (let x = centerX - sampleSize / 2; x < centerX + sampleSize / 2; x++) {
-      if (x < 0 || x >= width || y < 0 || y >= height) continue
+  // 2. Run K-Means Clustering
+  // K=5 to better separate noise
+  const centroids = runKMeans(samples, 5);
+
+  // 3. Score centroids to find the thermal sticker
+  // We look for a cluster that:
+  // - Is NOT grayscale (Saturation > threshold)
+  // - Matches our target hues
+  // - Has significant presence
+  
+  let bestCandidate = null;
+  let highestScore = -1;
+
+  centroids.forEach(c => {
+    const hsv = rgbToHsv(c.r, c.g, c.b);
+    const colorName = classifyHsv(hsv);
+    
+    if (colorName !== 'unknown') {
+      // Score = Saturation * (Cluster Size / Sample Size)
+      // Encourages vivid colors that occupy space
+      const score = hsv.s * (c.count / samples.length);
       
-      const i = (Math.floor(y) * width + Math.floor(x)) * 4
-      const r = data[i]
-      const g = data[i + 1]
-      const b = data[i + 2]
-      
-      totalR += r
-      totalG += g
-      totalB += b
-      
-      const hsv = rgbToHsv(r, g, b)
-      
-      // Classify pixel
-      if (hsv.s > COLOR_RANGES.red.satMin && hsv.v > COLOR_RANGES.red.valMin) {
-        if ((hsv.h >= COLOR_RANGES.red.hueMin && hsv.h <= COLOR_RANGES.red.hueMax) ||
-            (hsv.h >= COLOR_RANGES.red.hueMin2 && hsv.h <= COLOR_RANGES.red.hueMax2)) {
-          colorCounts.red++
-        } else if (hsv.h >= COLOR_RANGES.yellow.hueMin && hsv.h <= COLOR_RANGES.yellow.hueMax) {
-          colorCounts.yellow++
-        } else if (hsv.h >= COLOR_RANGES.green.hueMin && hsv.h <= COLOR_RANGES.green.hueMax) {
-          colorCounts.green++
-        } else {
-          colorCounts.other++
-        }
-      } else {
-        colorCounts.other++
+      if (score > highestScore) {
+        highestScore = score;
+        bestCandidate = {
+          color: colorName,
+          confidence: Math.min(100, Math.round((c.count / samples.length) * 200)), // Scale up for confidence
+          avgRgb: { r: c.r, g: c.g, b: c.b }
+        };
       }
-      
-      totalSamples++
     }
+  });
+
+  if (bestCandidate) {
+    return bestCandidate;
   }
 
-  // Determine dominant color
-  const { red, yellow, green } = colorCounts
-  const maxCount = Math.max(red, yellow, green)
-  
-  let detectedColor = 'unknown'
-  let confidence = 0
-  
-  if (maxCount > 0 && totalSamples > 0) {
-    if (red === maxCount) {
-      detectedColor = 'red'
-      confidence = (red / totalSamples) * 100
-    } else if (yellow === maxCount) {
-      detectedColor = 'yellow'
-      confidence = (yellow / totalSamples) * 100
-    } else if (green === maxCount) {
-      detectedColor = 'green'
-      confidence = (green / totalSamples) * 100
-    }
-  }
-
-  // Calculate average color for preview
-  const avgR = Math.round(totalR / totalSamples)
-  const avgG = Math.round(totalG / totalSamples)
-  const avgB = Math.round(totalB / totalSamples)
-
+  // Fallback if no specific color found (return unknown but valid structure)
   return {
-    color: detectedColor,
-    confidence: Math.round(confidence),
-    avgRgb: { r: avgR, g: avgG, b: avgB },
-    colorCounts
-  }
+    color: 'unknown',
+    confidence: 0,
+    avgRgb: { r: 128, g: 128, b: 128 }
+  };
 }
 
 /**
- * Capture frame from video element and analyze color
- * @param {HTMLVideoElement} videoElement - Video element with camera stream
- * @returns {Object} - Analysis result
+ * Capture frame and analyze
  */
 export function analyzeVideoFrame(videoElement) {
   const canvas = document.createElement('canvas')
-  canvas.width = videoElement.videoWidth
-  canvas.height = videoElement.videoHeight
+  // Reduce resolution for speed
+  canvas.width = 300 // Fixed small width for processing
+  const aspect = videoElement.videoHeight / videoElement.videoWidth
+  canvas.height = canvas.width * aspect || 300
   
-  const ctx = canvas.getContext('2d')
-  ctx.drawImage(videoElement, 0, 0)
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height)
   
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
   return analyzeImageData(imageData)
 }
 
 /**
- * Get color emoji and status message
+ * Get color display info
  */
 export function getColorInfo(color) {
   switch (color) {
@@ -201,7 +215,7 @@ export function getColorInfo(color) {
         emoji: '⚪',
         label: 'Unknown',
         status: 'UNKNOWN',
-        message: 'Could not detect sticker color. Please try again.',
+        message: 'Could not detect sticker color.',
         className: ''
       }
   }

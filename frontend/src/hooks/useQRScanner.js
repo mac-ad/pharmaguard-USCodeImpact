@@ -59,10 +59,10 @@ export function useQRScanner(onResult) {
             // Try to parse as JSON
             try {
               const parsed = JSON.parse(text)
-              if (onResult) onResult(parsed, text)
+              if (onResult) onResult(parsed, text, videoRef.current)
             } catch {
               // Not JSON, return raw text
-              if (onResult) onResult({ raw: text }, text)
+              if (onResult) onResult({ raw: text }, text, videoRef.current)
             }
           }
           
