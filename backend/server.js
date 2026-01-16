@@ -11,7 +11,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3001;
+const PORT = 4000;
 
 // Middleware
 app.use(cors());
@@ -69,8 +69,7 @@ const CHECKPOINT_ORDER = [
   'Manufacturer Dispatch',
   'Birgunj Distributor',
   'Lumbini Transit',
-  'Jumla Distributor',
-  'Pharmacy'
+  'Jumla Distributor'
 ];
 
 // Helper: Generate QR code as data URL
@@ -88,6 +87,19 @@ async function generateQRCode(data) {
 // ═══════════════════════════════════════════════════════════════
 // BATCH ENDPOINTS
 // ═══════════════════════════════════════════════════════════════
+
+app.get("/test", (req, res) => {
+  res.json({
+    message: "Hello World",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    nodeVersion: process.version,
+    platform: process.platform,
+    memoryUsage: process.memoryUsage(),
+    env: process.env.NODE_ENV || 'development'
+  });
+});
+
 
 // Create a new batch
 app.post('/batch', async (req, res) => {
@@ -195,25 +207,6 @@ app.post('/scan', async (req, res) => {
       return res.status(404).json({ error: 'Batch not found' });
     }
 
-    // Check if this checkpoint was already logged for this batch
-    const existingCheckpoint = db.prepare(
-      'SELECT * FROM checkpoints WHERE batchId = ? AND checkpoint = ?'
-    ).get(batchId, checkpoint);
-
-    if (existingCheckpoint) {
-      return res.json({
-        batchId,
-        checkpoint,
-        alreadyRecorded: true,
-        message: '✅ This checkpoint was already recorded for this batch.',
-        existingData: {
-          timestamp: existingCheckpoint.timestamp,
-          stickerColor: existingCheckpoint.stickerColor,
-          temperature: existingCheckpoint.temperature
-        }
-      });
-    }
-
     // Determine if within range based on sticker color
     // Green = safe, Yellow = warning but still ok, Red = overheated
     const colorLower = stickerColor.toLowerCase();
@@ -268,7 +261,7 @@ app.post('/scan', async (req, res) => {
 
     // Generate appropriate message (for checkpoint view - don't reveal safety status)
     let message = '✅ Checkpoint data recorded successfully';
-    
+
     // Note: We don't reveal invalidation status to checkpoint operators
     // Only pharmacist and consumer will see the safety status
 
@@ -437,14 +430,14 @@ app.post('/qr/generate', async (req, res) => {
     }
 
     // QR payload includes batchId and temperature
-    const qrData = { 
-      type: 'BATCH', 
+    const qrData = {
+      type: 'BATCH',
       batchId,
       ...(temperature !== undefined && temperature !== null ? { temperature: Number(temperature) } : {})
     };
-    
+
     const qrCode = await generateQRCode(qrData);
-    
+
     res.json({ qrCode, qrData });
   } catch (error) {
     console.error('Error generating QR code:', error);

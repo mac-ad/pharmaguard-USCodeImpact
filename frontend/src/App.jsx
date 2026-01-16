@@ -4,7 +4,6 @@ import Manufacturer from './pages/Manufacturer'
 import Checkpoint from './pages/Checkpoint'
 import Pharmacist from './pages/Pharmacist'
 import Consumer from './pages/Consumer'
-import StickerPreview from './pages/StickerPreview'
 import BatchCreated from './pages/BatchCreated'
 import DatabaseViewer from './pages/DatabaseViewer'
 import BatchView from './pages/BatchView'
@@ -45,12 +44,6 @@ function App() {
             Consumer
           </Link>
           <Link
-            to="/sticker-preview"
-            className={`nav-link ${location.pathname === '/sticker-preview' ? 'active' : ''}`}
-          >
-            Sticker Preview
-          </Link>
-          <Link
             to="/database-viewer"
             className={`nav-link ${location.pathname === '/database-viewer' ? 'active' : ''}`}
           >
@@ -65,7 +58,6 @@ function App() {
         <Route path="/checkpoint" element={<Checkpoint />} />
         <Route path="/pharmacist" element={<Pharmacist />} />
         <Route path="/consumer" element={<Consumer />} />
-        <Route path="/sticker-preview" element={<StickerPreview />} />
         <Route path="/database-viewer" element={<DatabaseViewer />} />
         <Route path="/batch/:batchId" element={<BatchView />} />
         <Route path="/batch-created" element={<BatchCreated />} />

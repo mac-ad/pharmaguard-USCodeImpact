@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQRScanner } from '../hooks/useQRScanner'
 import { useCamera } from '../hooks/useCamera'
 import { analyzeVideoFrame, getColorInfo } from '../utils/colorDetection'
@@ -8,93 +8,25 @@ const CHECKPOINTS = [
   'Manufacturer Dispatch',
   'Birgunj Distributor',
   'Lumbini Transit',
-  'Jumla Distributor',
-  'Pharmacy'
+  'Jumla Distributor'
 ]
 
 export default function Checkpoint() {
   // State
   const [currentCheckpoint, setCurrentCheckpoint] = useState(0)
-  const [step, setStep] = useState('select') // 'select', 'scanQR', 'scanSticker', 'enterTemp', 'result'
+  const [step, setStep] = useState('select') // 'select', 'scanQR', 'processing', 'submitting', 'result'
   const [scannedBatch, setScannedBatch] = useState(null)
   const [detectedColor, setDetectedColor] = useState(null)
   const [temperature, setTemperature] = useState(25) // Default temperature
   const [scanResult, setScanResult] = useState(null)
   const [error, setError] = useState(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
-
-  // QR Scanner
-  const handleQRResult = useCallback(async (data, rawText, videoElement) => {
-    if (data.type === 'BATCH' && data.batchId) {
-      // Stop scanning
-      qrScanner.stopScanning()
-
-      try {
-        // 1. Fetch batch details
-        const batch = await getBatch(data.batchId)
-        setScannedBatch(batch)
-
-        // 3. Extract temperature from QR code if available
-        const qrTemperature = data.temperature !== undefined && data.temperature !== null 
-          ? Number(data.temperature) 
-          : null
-
-        // 3. Use temperature from QR code, or estimate from color if not available
-        if (qrTemperature !== null) {
-          // Temperature is in QR code - use it directly
-          setTemperature(qrTemperature)
-          const stickerColor = getStickerColorFromTemp(qrTemperature)
-          setDetectedColor(getColorInfo(stickerColor))
-        } else {
-          // No temperature in QR - analyze color from camera
-          let colorResult = { color: 'unknown' }
-          try {
-            if (videoElement) {
-              colorResult = analyzeVideoFrame(videoElement)
-            }
-          } catch (e) {
-            console.error('Color analysis failed', e)
-          }
-          setDetectedColor(colorResult)
-
-          // Estimate temperature from color
-          const tempMap = { green: 22, yellow: 32, red: 45 }
-          const estimatedTemp = tempMap[colorResult.color] || 25
-          setTemperature(estimatedTemp)
-        }
-
-        // 4. Move to temperature slider step (user can adjust if needed)
-        setStep('enterTemp')
-      } catch (err) {
-        setError('Processing failed: ' + err.message)
-      }
-    }
-  }, [currentCheckpoint])
-
-  const qrScanner = useQRScanner(handleQRResult)
-  const camera = useCamera()
-
-  // Start QR scanning
-  const startQRScan = () => {
-    setError(null)
-    setStep('scanQR')
-    setTimeout(() => {
-      qrScanner.startScanning()
-    }, 100)
-  }
-
-
-
-  // Get sticker color based on temperature
-  const getStickerColorFromTemp = (temp) => {
-    if (temp <= 25) return 'green'
-    if (temp <= 35) return 'yellow'
-    return 'red'
-  }
+  const scannerRef = useRef(null)
+  const currentCheckpointRef = useRef(0)
 
   // Submit scan with temperature
-  const submitScan = async () => {
-    if (!scannedBatch) {
+  const submitScan = useCallback(async (batch, temp, checkpointIndex) => {
+    if (!batch) {
       setError('No batch selected')
       return
     }
@@ -103,7 +35,7 @@ export default function Checkpoint() {
     setIsAnalyzing(true)
 
     // Determine sticker color from temperature
-    const stickerColor = getStickerColorFromTemp(temperature)
+    const stickerColor = getStickerColorFromTemp(temp)
 
     try {
       // Get Geolocation
@@ -119,33 +51,133 @@ export default function Checkpoint() {
         console.warn('Geolocation failed or timed out', e)
       }
 
+      // Use the checkpoint index passed as parameter, or fallback to currentCheckpoint state
+      const checkpointIdx = checkpointIndex !== undefined ? checkpointIndex : currentCheckpoint
+
       // Log scan result
       const result = await logScan({
-        batchId: scannedBatch.batchId,
-        checkpoint: CHECKPOINTS[currentCheckpoint],
+        batchId: batch.batchId,
+        checkpoint: CHECKPOINTS[checkpointIdx],
         stickerColor: stickerColor,
         latitude,
         longitude,
-        temperature: temperature
+        temperature: temp
       })
 
-      // Handle "already recorded" response
-      if (result.alreadyRecorded) {
-        setScanResult({
-          ...result,
-          message: result.message || '✅ This checkpoint was already recorded for this batch.',
-          dataRecorded: true
-        })
-      } else {
-        setScanResult(result)
-      }
-      
+      setScanResult(result)
       setStep('result')
     } catch (err) {
       setError('Failed to log scan: ' + err.message)
+      setStep('scanQR') // Return to scan step on error
     } finally {
       setIsAnalyzing(false)
     }
+  }, [currentCheckpoint])
+
+  // QR Scanner
+  const handleQRResult = useCallback(async (data, rawText, videoElement) => {
+    if (data.type === 'BATCH' && data.batchId) {
+      // Stop scanning
+      if (scannerRef.current) {
+        scannerRef.current.stopScanning()
+      }
+
+      // Use ref to get the current checkpoint value (always up-to-date)
+      const checkpointIndex = currentCheckpointRef.current
+
+      // Show processing state immediately
+      setStep('processing')
+      setIsAnalyzing(true)
+      setError(null)
+      setScanResult(null) // Clear any previous result
+
+      try {
+        // 1. Fetch batch details
+        const batch = await getBatch(data.batchId)
+        setScannedBatch(batch)
+
+        // 2. Extract temperature from QR code if available
+        const qrTemperature = data.temperature !== undefined && data.temperature !== null
+          ? Number(data.temperature)
+          : null
+
+        let finalTemperature = null
+        let colorResult = null
+
+        // 3. Use temperature from QR code, or estimate from color if not available
+        if (qrTemperature !== null) {
+          // Temperature is in QR code - use it directly
+          finalTemperature = qrTemperature
+          const stickerColor = getStickerColorFromTemp(qrTemperature)
+          colorResult = getColorInfo(stickerColor)
+          setTemperature(qrTemperature)
+          setDetectedColor(colorResult)
+        } else {
+          // No temperature in QR - analyze color from camera
+          let detectedColor = { color: 'unknown' }
+          try {
+            if (videoElement) {
+              detectedColor = analyzeVideoFrame(videoElement)
+            }
+          } catch (e) {
+            console.error('Color analysis failed', e)
+          }
+          setDetectedColor(detectedColor)
+
+          // Estimate temperature from color
+          const tempMap = { green: 22, yellow: 32, red: 45 }
+          finalTemperature = tempMap[detectedColor.color] || 25
+          setTemperature(finalTemperature)
+        }
+
+        // 4. Show submitting state and automatically submit the scan data
+        // Use the captured checkpointIndex to ensure we use the correct checkpoint
+        setStep('submitting')
+        await submitScan(batch, finalTemperature, checkpointIndex)
+      } catch (err) {
+        setError('Processing failed: ' + err.message)
+        setStep('scanQR') // Return to scan step on error
+        setIsAnalyzing(false)
+      }
+    }
+  }, [submitScan])
+
+  const qrScanner = useQRScanner(handleQRResult)
+  scannerRef.current = qrScanner
+
+  useEffect(() => {
+    scannerRef.current = qrScanner
+  }, [qrScanner])
+
+  // Sync ref with state to ensure it's always up-to-date
+  useEffect(() => {
+    currentCheckpointRef.current = currentCheckpoint
+  }, [currentCheckpoint])
+
+  const camera = useCamera()
+
+  // Start QR scanning
+  const startQRScan = () => {
+    // Reset all state when starting a new scan
+    setError(null)
+    setScannedBatch(null)
+    setDetectedColor(null)
+    setTemperature(25)
+    setScanResult(null)
+    setIsAnalyzing(false)
+    setStep('scanQR')
+    setTimeout(() => {
+      qrScanner.startScanning()
+    }, 100)
+  }
+
+
+
+  // Get sticker color based on temperature
+  const getStickerColorFromTemp = (temp) => {
+    if (temp <= 25) return 'green'
+    if (temp <= 35) return 'yellow'
+    return 'red'
   }
 
   // Reset and scan next
@@ -173,47 +205,119 @@ export default function Checkpoint() {
     }
   }, [])
 
+  // Checkpoint icons
+  const checkpointIcons = ['🏭', '📦', '🚛', '🏪']
+  const checkpointColors = [
+    'linear-gradient(135deg, #6366f1, #818cf8)',
+    'linear-gradient(135deg, #8b5cf6, #a78bfa)',
+    'linear-gradient(135deg, #ec4899, #f472b6)',
+    'linear-gradient(135deg, #f59e0b, #fbbf24)'
+  ]
+
   return (
     <div className="page">
-      <div className="container" style={{ maxWidth: '600px' }}>
-        <header className="text-center mb-3">
-          <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>🚚</div>
-          <h1>Checkpoint Scan</h1>
-          <p className="text-secondary">Log temperature conditions at each transit point</p>
+      <div className="container" style={{ maxWidth: '700px' }}>
+        <header className="text-center mb-4">
+          <div style={{
+            fontSize: '4rem',
+            marginBottom: '0.5rem',
+            background: 'linear-gradient(135deg, #6366f1, #10b981)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text'
+          }}>🚚</div>
+          <h1 style={{
+            fontSize: '2rem',
+            fontWeight: 700,
+            marginBottom: '0.5rem',
+            background: 'linear-gradient(135deg, #fff, #a0aec0)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text'
+          }}>Checkpoint Scanner</h1>
+          <p className="text-secondary" style={{ fontSize: '1rem' }}>
+            Scan batch QR codes to record temperature conditions
+          </p>
         </header>
 
         {/* Checkpoint Selection */}
         {step === 'select' && (
-          <div className="card">
-            <h3 className="mb-2">Select Checkpoint</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div className="card" style={{
+            background: 'var(--bg-card)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '16px',
+            padding: '2rem'
+          }}>
+            <div style={{
+              textAlign: 'center',
+              marginBottom: '2rem',
+              paddingBottom: '1.5rem',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+            }}>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+                Select Checkpoint Location
+              </h2>
+              <p className="text-muted" style={{ fontSize: '0.9rem' }}>
+                Choose your current location to begin scanning
+              </p>
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: '1rem'
+            }}>
               {CHECKPOINTS.map((cp, index) => (
                 <button
                   key={cp}
                   onClick={() => {
                     setCurrentCheckpoint(index)
+                    currentCheckpointRef.current = index
                     startQRScan()
                   }}
-                  className="btn btn-outline"
+                  className="btn"
                   style={{
-                    justifyContent: 'flex-start',
-                    padding: '1rem 1.25rem'
+                    background: checkpointColors[index],
+                    border: 'none',
+                    padding: '1.5rem',
+                    borderRadius: '12px',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s ease',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: '1rem',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.target.style.transform = 'translateY(-4px)'
+                    e.target.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.25)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.transform = 'translateY(0)'
+                    e.target.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)'
                   }}
                 >
-                  <span style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: '50%',
-                    background: 'var(--accent)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '0.875rem',
-                    fontWeight: 600
+                  <div style={{ fontSize: '2.5rem' }}>
+                    {checkpointIcons[index]}
+                  </div>
+                  <div style={{
+                    fontSize: '0.75rem',
+                    opacity: 0.9,
+                    textAlign: 'center',
+                    lineHeight: '1.4'
                   }}>
-                    {index + 1}
-                  </span>
-                  {cp}
+                    {cp}
+                  </div>
+                  <div style={{
+                    fontSize: '0.7rem',
+                    opacity: 0.8,
+                    marginTop: '0.25rem'
+                  }}>
+                    Step {index + 1}
+                  </div>
                 </button>
               ))}
             </div>
@@ -222,356 +326,329 @@ export default function Checkpoint() {
 
         {/* QR Code Scanning */}
         {step === 'scanQR' && (
-          <div className="card">
-            <div className="flex-between mb-2">
-              <h3>Scan QR & Sticker</h3>
-              <span className="status-badge status-warning">
-                {CHECKPOINTS[currentCheckpoint]}
-              </span>
+          <div className="card" style={{
+            background: 'var(--bg-card)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '16px',
+            padding: '1.5rem',
+            overflow: 'hidden'
+          }}>
+            {/* Header */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '1.5rem',
+              paddingBottom: '1rem',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div style={{
+                  fontSize: '1.5rem',
+                  background: checkpointColors[currentCheckpoint],
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  {checkpointIcons[currentCheckpoint]}
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600 }}>
+                    {CHECKPOINTS[currentCheckpoint]}
+                  </h3>
+                  <p className="text-muted" style={{ margin: 0, fontSize: '0.8rem' }}>
+                    Step {currentCheckpoint + 1} of {CHECKPOINTS.length}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={resetForNext}
+                className="btn btn-outline"
+                style={{
+                  padding: '0.5rem 1rem',
+                  fontSize: '0.875rem'
+                }}
+              >
+                ← Back
+              </button>
             </div>
 
-            <div className="camera-container">
+            {/* Camera Container */}
+            <div className="camera-container" style={{
+              borderRadius: '12px',
+              overflow: 'hidden',
+              marginBottom: '1rem',
+              position: 'relative',
+              width: '100%',
+              height: '400px',
+              minHeight: '400px',
+              background: '#000',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
               <video
                 ref={qrScanner.videoRef}
                 className="camera-video"
                 playsInline
                 muted
+                style={{
+                  borderRadius: '12px',
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover'
+                }}
               />
               <div className="camera-overlay"></div>
-              <div className="camera-status">
-                {qrScanner.isScanning ? '📷 Scanning for QR & Sticker...' : 'Initializing camera...'}
-              </div>
-              <p className="text-center text-muted mt-2" style={{ fontSize: '0.85rem' }}>
-                Ensure both the QR Code and Temperature Sticker are visible in the frame.
-              </p>
-            </div>
-
-            {error && (
-              <div className="card mt-2" style={{
-                background: 'rgba(239, 68, 68, 0.1)',
-                border: '1px solid rgba(239, 68, 68, 0.3)'
+              <div className="camera-status" style={{
+                background: 'rgba(0, 0, 0, 0.7)',
+                backdropFilter: 'blur(10px)',
+                borderRadius: '8px',
+                padding: '0.75rem 1rem'
               }}>
-                <p className="text-danger">{error}</p>
-              </div>
-            )}
-
-            <button
-              onClick={resetForNext}
-              className="btn btn-outline btn-block mt-2"
-            >
-              ← Back to Checkpoints
-            </button>
-          </div>
-        )}
-
-        {/* Temperature Input */}
-        {step === 'enterTemp' && scannedBatch && (
-          <div className="card">
-            <div className="flex-between mb-2">
-              <h3>Enter Temperature</h3>
-              <span className="status-badge status-warning">
-                {CHECKPOINTS[currentCheckpoint]}
-              </span>
-            </div>
-
-            <div style={{
-              background: 'var(--bg-secondary)',
-              borderRadius: 'var(--radius-md)',
-              padding: '1rem',
-              marginBottom: '1.5rem'
-            }}>
-              <p className="text-muted" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>BATCH</p>
-              <p className="mono" style={{ fontWeight: 600 }}>{scannedBatch.batchId}</p>
-              <p className="text-secondary" style={{ fontSize: '0.875rem' }}>{scannedBatch.medicineName}</p>
-              <div className="mt-2" style={{ fontSize: '0.875rem' }}>
-                <span className="text-muted">Safe Range: </span>
-                <span>{scannedBatch.optimalTempMin}°C – {scannedBatch.optimalTempMax}°C</span>
-                <br />
-                <span className="text-muted">Max Allowed: </span>
-                <span className="text-warning">{scannedBatch.optimalTempMax + 5}°C</span>
-                <span className="text-muted" style={{ fontSize: '0.75rem' }}> (max + 5°C)</span>
-              </div>
-            </div>
-
-            {/* Temperature Slider with Sticker Visualization */}
-            <div className="card mb-2" style={{
-              background: 'rgba(99, 102, 241, 0.1)',
-              border: '1px solid rgba(99, 102, 241, 0.2)'
-            }}>
-              <h4 className="mb-2" style={{ fontSize: '1rem' }}>🌡️ Adjust Temperature</h4>
-              <p className="text-secondary mb-3" style={{ fontSize: '0.875rem' }}>
-                Move the slider to match the sticker color. Temperature will be automatically recorded.
-              </p>
-
-              {/* Sticker Preview */}
-              <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                marginBottom: '1.5rem'
-              }}>
-                <div style={{
-                  width: '120px',
-                  height: '120px',
-                  borderRadius: '50%',
-                  background: getCurrentColorInfo().color === 'green'
-                    ? 'linear-gradient(135deg, #10b981, #34d399)'
-                    : getCurrentColorInfo().color === 'yellow'
-                      ? 'linear-gradient(135deg, #f59e0b, #fbbf24)'
-                      : 'linear-gradient(135deg, #ef4444, #f87171)',
-                  boxShadow: `0 0 40px ${getCurrentColorInfo().color === 'green' ? 'rgba(16, 185, 129, 0.5)' :
-                    getCurrentColorInfo().color === 'yellow' ? 'rgba(245, 158, 11, 0.5)' :
-                      'rgba(239, 68, 68, 0.5)'
-                    }`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: '4px solid rgba(255, 255, 255, 0.1)',
-                  transition: 'all 0.3s ease',
-                  marginBottom: '1rem'
-                }}>
-                  <span style={{
-                    fontSize: '2rem',
-                    fontWeight: 'bold',
-                    color: '#0a0f1c'
-                  }}>
-                    {temperature}°
-                  </span>
-                </div>
-                <div style={{
-                  padding: '0.5rem 1rem',
-                  borderRadius: '6px',
-                  background: getCurrentColorInfo().color === 'green'
-                    ? 'rgba(16, 185, 129, 0.15)'
-                    : getCurrentColorInfo().color === 'yellow'
-                      ? 'rgba(245, 158, 11, 0.15)'
-                      : 'rgba(239, 68, 68, 0.15)',
-                  color: getCurrentColorInfo().color === 'green'
-                    ? 'var(--safe)'
-                    : getCurrentColorInfo().color === 'yellow'
-                      ? 'var(--warning)'
-                      : 'var(--danger)',
-                  fontWeight: 'bold',
-                  border: `1px solid ${getCurrentColorInfo().color === 'green'
-                    ? 'rgba(16, 185, 129, 0.3)'
-                    : getCurrentColorInfo().color === 'yellow'
-                      ? 'rgba(245, 158, 11, 0.3)'
-                      : 'rgba(239, 68, 68, 0.3)'
-                    }`
-                }}>
-                  {getCurrentColorInfo().emoji} {getCurrentColorInfo().label}
-                </div>
-              </div>
-
-              {/* Temperature Slider */}
-              <div>
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  marginBottom: '0.5rem',
-                  alignItems: 'center'
-                }}>
-                  <span style={{ fontSize: '0.9rem' }}>Temperature</span>
-                  <span style={{
-                    color: temperature > (scannedBatch.optimalTempMax + 5) ? 'var(--danger)' :
-                      temperature > scannedBatch.optimalTempMax ? 'var(--warning)' : 'var(--safe)',
-                    fontWeight: 'bold',
-                    fontSize: '1.1rem'
-                  }}>
-                    {temperature}°C
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="10"
-                  max="50"
-                  value={temperature}
-                  onChange={(e) => setTemperature(Number(e.target.value))}
-                  step="1"
-                  style={{
-                    width: '100%',
-                    height: '10px',
-                    borderRadius: '5px',
-                    background: 'linear-gradient(to right, #10b981 0%, #10b981 50%, #f59e0b 70%, #ef4444 85%, #ef4444 100%)',
-                    outline: 'none',
-                    cursor: 'pointer',
-                    WebkitAppearance: 'none'
-                  }}
-                />
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontSize: '0.75rem',
-                  opacity: 0.6,
-                  marginTop: '0.5rem'
-                }}>
-                  <span>10°C</span>
-                  <span style={{ color: 'var(--warning)' }}>
-                    Max: {scannedBatch.optimalTempMax + 5}°C
-                  </span>
-                  <span>50°C</span>
-                </div>
-                {temperature > (scannedBatch.optimalTempMax + 5) && (
-                  <div style={{
-                    marginTop: '0.75rem',
-                    padding: '0.75rem',
-                    background: 'rgba(239, 68, 68, 0.1)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    borderRadius: '6px'
-                  }}>
-                    <p className="text-danger" style={{ fontSize: '0.875rem', margin: 0 }}>
-                      ⚠️ Temperature exceeds safe limit. Batch will be invalidated!
-                    </p>
+                {isAnalyzing ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                    <div className="loader" style={{ width: 20, height: 20, borderWidth: 2 }}></div>
+                    <span>Processing...</span>
+                  </div>
+                ) : qrScanner.isScanning ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                    <span>📷</span>
+                    <span>Scanning QR Code...</span>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                    <span>⏳</span>
+                    <span>Initializing camera...</span>
                   </div>
                 )}
               </div>
             </div>
 
-            {error && (
-              <div className="card mt-2" style={{
-                background: 'rgba(239, 68, 68, 0.1)',
-                border: '1px solid rgba(239, 68, 68, 0.3)'
+            {/* Instructions */}
+            <div style={{
+              background: 'rgba(99, 102, 241, 0.1)',
+              border: '1px solid rgba(99, 102, 241, 0.2)',
+              borderRadius: '8px',
+              padding: '1rem',
+              marginBottom: '1rem'
+            }}>
+              <p className="text-secondary" style={{
+                margin: 0,
+                fontSize: '0.875rem',
+                textAlign: 'center',
+                lineHeight: '1.5'
               }}>
-                <p className="text-danger">{error}</p>
+                {isAnalyzing ? (
+                  <>⏳ Processing scanned data...</>
+                ) : (
+                  <>📱 Point your camera at the batch QR code. Data will be automatically recorded.</>
+                )}
+              </p>
+            </div>
+
+            {error && (
+              <div className="card" style={{
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                borderRadius: '8px',
+                padding: '1rem',
+                marginBottom: '1rem'
+              }}>
+                <p className="text-danger" style={{ margin: 0, textAlign: 'center' }}>
+                  ⚠️ {error}
+                </p>
+                <button
+                  onClick={startQRScan}
+                  className="btn btn-outline btn-block mt-2"
+                  style={{ fontSize: '0.875rem' }}
+                >
+                  Try Again
+                </button>
               </div>
             )}
+          </div>
+        )}
 
-            <div className="flex gap-2 mt-3">
-              <button
-                onClick={submitScan}
-                disabled={isAnalyzing}
-                className="btn btn-primary btn-lg"
-                style={{ flex: 1 }}
-              >
-                {isAnalyzing ? (
-                  <>
-                    <span className="loader" style={{ width: 20, height: 20, borderWidth: 2 }}></span>
-                    Logging...
-                  </>
-                ) : (
-                  <>✅ Log Checkpoint ({temperature}°C)</>
-                )}
-              </button>
-              <button
-                onClick={resetForNext}
-                className="btn btn-outline"
-              >
-                Cancel
-              </button>
+        {/* Processing State (fetching batch, extracting temperature) */}
+        {step === 'processing' && (
+          <div className="card" style={{
+            background: 'var(--bg-card)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '16px',
+            padding: '3rem 2rem'
+          }}>
+            <div className="text-center">
+              <div className="loader" style={{
+                width: 64,
+                height: 64,
+                margin: '0 auto 2rem',
+                borderWidth: '4px',
+                borderColor: 'rgba(99, 102, 241, 0.3)',
+                borderTopColor: '#6366f1'
+              }}></div>
+              <h3 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+                Processing Scan...
+              </h3>
+              <p className="text-secondary" style={{ fontSize: '1rem' }}>
+                Analyzing QR code and temperature data
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Submitting State */}
+        {step === 'submitting' && (
+          <div className="card" style={{
+            background: 'var(--bg-card)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '16px',
+            padding: '3rem 2rem'
+          }}>
+            <div className="text-center">
+              <div className="loader" style={{
+                width: 64,
+                height: 64,
+                margin: '0 auto 2rem',
+                borderWidth: '4px',
+                borderColor: 'rgba(16, 185, 129, 0.3)',
+                borderTopColor: '#10b981'
+              }}></div>
+              <h3 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+                Recording Data...
+              </h3>
+              <p className="text-secondary" style={{ fontSize: '1rem' }}>
+                Submitting checkpoint scan to database
+              </p>
             </div>
           </div>
         )}
 
         {/* Result */}
         {step === 'result' && scanResult && (
-          <div className="card text-center">
-            {scanResult.alreadyRecorded ? (
-              <>
-                <div className="sticker-preview" style={{
-                  background: 'linear-gradient(135deg, #6366f1, #818cf8)',
-                  boxShadow: '0 0 40px rgba(99, 102, 241, 0.5)'
-                }}>ℹ️</div>
-                <h2 style={{ color: 'var(--accent)' }}>Already Recorded</h2>
-                <p className="text-secondary mt-1">
-                  {scanResult.message || 'This checkpoint was already recorded for this batch.'}
-                </p>
-                {scanResult.existingData && (
-                  <div style={{
-                    background: 'var(--bg-secondary)',
-                    borderRadius: 'var(--radius-md)',
-                    padding: '1rem',
-                    margin: '1.5rem 0',
-                    textAlign: 'left'
-                  }}>
-                    <p className="text-muted" style={{ fontSize: '0.75rem', marginBottom: '0.5rem' }}>PREVIOUSLY RECORDED</p>
-                    <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
-                      <span className="text-muted">Timestamp</span>
-                      <span>{new Date(scanResult.existingData.timestamp).toLocaleString()}</span>
-                    </div>
-                    <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
-                      <span className="text-muted">Temperature</span>
-                      <span>{scanResult.existingData.temperature}°C</span>
-                    </div>
-                    <div className="flex-between">
-                      <span className="text-muted">Sticker Color</span>
-                      <span>
-                        {scanResult.existingData.stickerColor === 'green' ? '🟢' : 
-                         scanResult.existingData.stickerColor === 'yellow' ? '🟡' : '🔴'}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <div className="sticker-preview" style={{
-                  background: 'linear-gradient(135deg, #10b981, #34d399)',
-                  boxShadow: '0 0 40px rgba(16, 185, 129, 0.5)'
-                }}>✅</div>
-                <h2 className="text-safe">Data Recorded</h2>
-                <p className="text-secondary mt-1">
-                  {scanResult.message || 'Checkpoint data has been successfully recorded.'}
-                </p>
-                <p className="text-muted mt-2" style={{ fontSize: '0.875rem' }}>
-                  Safety status will be visible to pharmacist and consumer only.
-                </p>
-              </>
-            )}
+          <div className="card text-center" style={{
+            background: 'var(--bg-card)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '16px',
+            padding: '2rem'
+          }}>
+            <div style={{
+              width: '80px',
+              height: '80px',
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, #10b981, #34d399)',
+              boxShadow: '0 0 40px rgba(16, 185, 129, 0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 1.5rem',
+              fontSize: '2.5rem'
+            }}>✅</div>
+            <h2 style={{
+              fontSize: '1.75rem',
+              fontWeight: 700,
+              color: '#10b981',
+              marginBottom: '0.5rem'
+            }}>
+              Data Recorded
+            </h2>
+            <p className="text-secondary" style={{ fontSize: '1rem', marginBottom: '2rem' }}>
+              {scanResult.message || 'Checkpoint data has been successfully recorded.'}
+            </p>
 
             <div style={{
-              background: 'var(--bg-secondary)',
-              borderRadius: 'var(--radius-md)',
-              padding: '1rem',
-              margin: '1.5rem 0'
+              background: 'rgba(255, 255, 255, 0.05)',
+              borderRadius: '12px',
+              padding: '1.5rem',
+              marginBottom: '2rem',
+              border: '1px solid rgba(255, 255, 255, 0.1)'
             }}>
-              <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
-                <span className="text-muted">Checkpoint</span>
-                <span>{CHECKPOINTS[currentCheckpoint]}</span>
-              </div>
-              <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
-                <span className="text-muted">Batch</span>
-                <span className="mono">{scannedBatch?.batchId}</span>
-              </div>
-              <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
-                <span className="text-muted">Sticker Color</span>
-                <span>
-                  {(() => {
-                    const color = scanResult.stickerColor || getStickerColorFromTemp(scanResult.temperature || temperature)
-                    const colorInfo = getColorInfo(color)
-                    return `${colorInfo.emoji} ${colorInfo.label}`
-                  })()}
-                </span>
-              </div>
-              {scanResult.temperature !== undefined && (
-                <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
-                  <span className="text-muted">Temperature</span>
-                  <span style={{ fontWeight: 600 }}>
-                    {scanResult.temperature}°C
-                  </span>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, 1fr)',
+                gap: '1rem'
+              }}>
+                <div style={{
+                  background: 'rgba(99, 102, 241, 0.1)',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(99, 102, 241, 0.2)'
+                }}>
+                  <div className="text-muted" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>
+                    Checkpoint
+                  </div>
+                  <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                    {CHECKPOINTS[currentCheckpoint]}
+                  </div>
                 </div>
-              )}
-              <div className="flex-between">
-                <span className="text-muted">Recording Status</span>
-                <span className="status-badge status-safe">
-                  {scanResult.alreadyRecorded ? 'ALREADY RECORDED' : 'RECORDED'}
-                </span>
+                <div style={{
+                  background: 'rgba(139, 92, 246, 0.1)',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(139, 92, 246, 0.2)'
+                }}>
+                  <div className="text-muted" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>
+                    Batch ID
+                  </div>
+                  <div className="mono" style={{ fontWeight: 600, fontSize: '0.85rem' }}>
+                    {scannedBatch?.batchId}
+                  </div>
+                </div>
+                <div style={{
+                  background: 'rgba(16, 185, 129, 0.1)',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(16, 185, 129, 0.2)'
+                }}>
+                  <div className="text-muted" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>
+                    Temperature
+                  </div>
+                  <div style={{ fontWeight: 700, fontSize: '1.1rem', color: '#10b981' }}>
+                    {scanResult.temperature !== undefined ? `${scanResult.temperature}°C` : 'N/A'}
+                  </div>
+                </div>
+                <div style={{
+                  background: 'rgba(245, 158, 11, 0.1)',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(245, 158, 11, 0.2)'
+                }}>
+                  <div className="text-muted" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>
+                    Status
+                  </div>
+                  <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#10b981' }}>
+                    ✓ Recorded
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* Note: Safety status hidden from checkpoint view */}
-            <div className="card" style={{
-              background: 'rgba(99, 102, 241, 0.1)',
-              border: '1px solid rgba(99, 102, 241, 0.2)',
-              marginBottom: '1.5rem'
-            }}>
-              <p className="text-secondary" style={{ fontSize: '0.875rem', margin: 0, textAlign: 'center' }}>
-                ℹ️ Safety and invalidation status is only visible to pharmacist and consumer.
-              </p>
-            </div>
 
             <button
               onClick={resetForNext}
               className="btn btn-primary btn-lg btn-block"
+              style={{
+                background: checkpointColors[currentCheckpoint],
+                border: 'none',
+                padding: '1rem 2rem',
+                fontSize: '1rem',
+                fontWeight: 600,
+                borderRadius: '10px',
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.2)'
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.transform = 'translateY(-2px)'
+                e.target.style.boxShadow = '0 6px 16px rgba(0, 0, 0, 0.3)'
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.transform = 'translateY(0)'
+                e.target.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2)'
+              }}
             >
               Scan Another Batch
             </button>

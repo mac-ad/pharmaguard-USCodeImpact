@@ -337,13 +337,19 @@ h3 {
   overflow: hidden;
   background: var(--bg-secondary);
   border: 2px solid var(--border);
+  min-height: 400px;
+  height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .camera-video {
   width: 100%;
-  height: auto;
+  height: 100%;
   display: block;
   background: #000;
+  object-fit: cover;
 }
 
 .camera-overlay {

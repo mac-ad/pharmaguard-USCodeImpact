@@ -1,0 +1,13 @@
+/deploy_to_aws_script/
+/frontend/dist/
+/backend/node_modules/
+/backend/pharmaguard.db
+/backend/package-lock.json
+/backend/package.json
+/backend/server.js
+/backend/server.js.map
+/backend/server.js.map.gz
+/backend/server.js.map.gz.br
+/backend/server.js.map.gz.br.gz
+/backend/server.js.map.gz.br.gz.br
+/backend/server.js.map.gz.br.gz.br.gz

@@ -1,4 +1,4 @@
-export const API_BASE = '/api'
+export const API_BASE = import.meta.env.VITE_API_BASE
 
 export async function createBatch(data) {
   const response = await fetch(`${API_BASE}/batch`, {
