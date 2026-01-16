@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '../utils/api'
+import { createTablets } from '../utils/api'
 
 function DatabaseViewer() {
     const navigate = useNavigate()
@@ -13,10 +14,48 @@ function DatabaseViewer() {
     const [showModal, setShowModal] = useState(false)
     const [loadingBatch, setLoadingBatch] = useState(false)
     const [viewMode, setViewMode] = useState('batches') // 'batches' or 'checkpoints'
+    const [lastDataHash, setLastDataHash] = useState(null)
+    const [isAutoRefresh, setIsAutoRefresh] = useState(true)
+    const [justUpdated, setJustUpdated] = useState(false)
+    const [generatingTablets, setGeneratingTablets] = useState(null)
+    const [generatedTablets, setGeneratedTablets] = useState(null)
 
     useEffect(() => {
         fetchData()
     }, [])
+
+    // Real-time polling for updates
+    useEffect(() => {
+        if (!isAutoRefresh || !data) return
+
+        const pollInterval = setInterval(async () => {
+            try {
+                const response = await fetch(`${API_BASE}/database/all`)
+                if (!response.ok) return
+                const newData = await response.json()
+                
+                // Create a simple hash to detect changes
+                const newHash = `${newData.checkpointCount}-${newData.batchCount}-${newData.lastUpdated}`
+                
+                // Only update if data actually changed
+                if (newHash !== lastDataHash && lastDataHash !== null) {
+                    setData(newData)
+                    setLastDataHash(newHash)
+                    // Show update indicator
+                    setJustUpdated(true)
+                    setTimeout(() => setJustUpdated(false), 2000)
+                } else if (lastDataHash === null) {
+                    // First time, just set the hash
+                    setLastDataHash(newHash)
+                }
+            } catch (err) {
+                // Silently fail for polling - don't show errors
+                console.warn('Polling error:', err)
+            }
+        }, 2000) // Poll every 2 seconds
+
+        return () => clearInterval(pollInterval)
+    }, [isAutoRefresh, data, lastDataHash])
 
     const fetchData = async () => {
         try {
@@ -25,6 +64,9 @@ function DatabaseViewer() {
             if (!response.ok) throw new Error('Failed to fetch database data')
             const result = await response.json()
             setData(result)
+            // Update hash for change detection
+            const hash = `${result.checkpointCount}-${result.batchCount}-${result.lastUpdated}`
+            setLastDataHash(hash)
         } catch (err) {
             setError(err.message)
         } finally {
@@ -88,6 +130,20 @@ function DatabaseViewer() {
         )
     }
 
+    const generateTabletsForBatch = async (batchId, count = 10) => {
+        try {
+            setGeneratingTablets(batchId)
+            const result = await createTablets(batchId, count)
+            setGeneratedTablets({ batchId, tablets: result.tablets })
+            // Refresh data after generating
+            await fetchData()
+        } catch (err) {
+            alert('Failed to generate tablets: ' + err.message)
+        } finally {
+            setGeneratingTablets(null)
+        }
+    }
+
     if (loading) {
         return (
             <div className="page">
@@ -129,9 +185,34 @@ function DatabaseViewer() {
             <div className="container">
                 <div className="page-header">
                     <div className="page-icon">🗄️</div>
-                    <div>
-                        <h1 className="page-title">Database Viewer</h1>
-                        <p className="page-subtitle">Complete view of all system data</p>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <h1 className="page-title">Database Viewer</h1>
+                            {isAutoRefresh && (
+                                <span style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem',
+                                    padding: '0.25rem 0.5rem',
+                                    background: 'rgba(0, 255, 136, 0.15)',
+                                    borderRadius: '6px',
+                                    fontSize: '0.75rem',
+                                    color: '#00ff88',
+                                    fontWeight: 'bold'
+                                }}>
+                                    <span style={{
+                                        display: 'inline-block',
+                                        width: '8px',
+                                        height: '8px',
+                                        borderRadius: '50%',
+                                        background: '#00ff88',
+                                        animation: justUpdated ? 'pulse 0.5s ease' : 'none'
+                                    }}></span>
+                                    Live
+                                </span>
+                            )}
+                        </div>
+                        <p className="page-subtitle">Complete view of all system data {isAutoRefresh && '(Auto-refreshing every 2s)'}</p>
                     </div>
                 </div>
 
@@ -345,6 +426,36 @@ function DatabaseViewer() {
                                                             }}
                                                         >
                                                             📦 View QR & Sticker
+                                                        </button>
+                                                        <button
+                                                            onClick={() => generateTabletsForBatch(batch.batchId, 10)}
+                                                            disabled={generatingTablets === batch.batchId}
+                                                            style={{
+                                                                padding: '0.5rem 1rem',
+                                                                background: generatingTablets === batch.batchId 
+                                                                    ? 'rgba(139, 92, 246, 0.3)' 
+                                                                    : 'rgba(139, 92, 246, 0.2)',
+                                                                border: '1px solid #8b5cf6',
+                                                                borderRadius: '6px',
+                                                                color: '#a78bfa',
+                                                                cursor: generatingTablets === batch.batchId ? 'not-allowed' : 'pointer',
+                                                                fontSize: '0.85rem',
+                                                                fontWeight: 'bold',
+                                                                transition: 'all 0.2s ease',
+                                                                opacity: generatingTablets === batch.batchId ? 0.6 : 1
+                                                            }}
+                                                            onMouseEnter={(e) => {
+                                                                if (generatingTablets !== batch.batchId) {
+                                                                    e.target.style.background = 'rgba(139, 92, 246, 0.3)'
+                                                                }
+                                                            }}
+                                                            onMouseLeave={(e) => {
+                                                                if (generatingTablets !== batch.batchId) {
+                                                                    e.target.style.background = 'rgba(139, 92, 246, 0.2)'
+                                                                }
+                                                            }}
+                                                        >
+                                                            {generatingTablets === batch.batchId ? 'Generating...' : '💊 Generate Tablets'}
                                                         </button>
                                                     </div>
                                                 </td>
@@ -606,11 +717,119 @@ function DatabaseViewer() {
                     </div>
                 )}
 
+                {/* Generated Tablets Modal */}
+                {generatedTablets && (
+                    <div style={{
+                        position: 'fixed',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        background: 'rgba(0, 0, 0, 0.8)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 1000,
+                        padding: '2rem'
+                    }}>
+                        <div className="card" style={{
+                            maxWidth: '800px',
+                            maxHeight: '90vh',
+                            overflow: 'auto',
+                            position: 'relative'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                                <h2>💊 Generated Tablet QR Codes</h2>
+                                <button
+                                    onClick={() => setGeneratedTablets(null)}
+                                    style={{
+                                        padding: '0.5rem 1rem',
+                                        background: 'rgba(255, 255, 255, 0.1)',
+                                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                                        borderRadius: '6px',
+                                        color: '#fff',
+                                        cursor: 'pointer',
+                                        fontSize: '1rem'
+                                    }}
+                                >
+                                    ✕ Close
+                                </button>
+                            </div>
+                            <p className="text-secondary mb-3">
+                                Batch: <code>{generatedTablets.batchId}</code> • {generatedTablets.tablets.length} tablets generated
+                            </p>
+                            <p className="text-muted mb-3" style={{ fontSize: '0.875rem' }}>
+                                These QR codes can be scanned by consumers to verify medicine safety.
+                            </p>
+                            <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+                                gap: '1rem',
+                                marginTop: '1.5rem'
+                            }}>
+                                {generatedTablets.tablets.map((tablet) => (
+                                    <div key={tablet.tabletId} className="card" style={{
+                                        padding: '1rem',
+                                        textAlign: 'center',
+                                        background: 'var(--bg-card)'
+                                    }}>
+                                        <div style={{
+                                            background: 'white',
+                                            padding: '0.5rem',
+                                            borderRadius: '6px',
+                                            marginBottom: '0.5rem',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                        }}>
+                                            <img
+                                                src={tablet.qrCode}
+                                                alt={`Tablet ${tablet.tabletId}`}
+                                                style={{ width: '100%', maxWidth: '120px', height: 'auto' }}
+                                            />
+                                        </div>
+                                        <p className="mono" style={{
+                                            fontSize: '0.7rem',
+                                            color: 'var(--text-muted)',
+                                            wordBreak: 'break-all'
+                                        }}>
+                                            {tablet.tabletId}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Action Buttons */}
                 <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
                     <button className="btn-primary" onClick={fetchData}>
                         🔄 Refresh Data
                     </button>
+                    <button
+                        className="btn-primary"
+                        onClick={() => setIsAutoRefresh(!isAutoRefresh)}
+                        style={{
+                            background: isAutoRefresh 
+                                ? 'linear-gradient(135deg, #00ff88 0%, #00cc66 100%)' 
+                                : 'rgba(255, 255, 255, 0.1)',
+                            borderColor: isAutoRefresh ? '#00ff88' : 'rgba(255, 255, 255, 0.2)'
+                        }}
+                    >
+                        {isAutoRefresh ? '⏸️ Pause Auto-Refresh' : '▶️ Resume Auto-Refresh'}
+                    </button>
+                    {data?.lastUpdated && (
+                        <div style={{
+                            padding: '0.5rem 1rem',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            borderRadius: '6px',
+                            fontSize: '0.875rem',
+                            color: 'var(--text-muted)'
+                        }}>
+                            Last updated: {new Date(data.lastUpdated).toLocaleTimeString()}
+                        </div>
+                    )}
                     <button
                         className="btn-primary"
                         onClick={clearDatabase}
@@ -714,6 +933,11 @@ function DatabaseViewer() {
 
         @keyframes spin {
           to { transform: rotate(360deg); }
+        }
+        
+        @keyframes pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.5; transform: scale(1.2); }
         }
 
         .error-message {

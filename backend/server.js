@@ -195,6 +195,25 @@ app.post('/scan', async (req, res) => {
       return res.status(404).json({ error: 'Batch not found' });
     }
 
+    // Check if this checkpoint was already logged for this batch
+    const existingCheckpoint = db.prepare(
+      'SELECT * FROM checkpoints WHERE batchId = ? AND checkpoint = ?'
+    ).get(batchId, checkpoint);
+
+    if (existingCheckpoint) {
+      return res.json({
+        batchId,
+        checkpoint,
+        alreadyRecorded: true,
+        message: '✅ This checkpoint was already recorded for this batch.',
+        existingData: {
+          timestamp: existingCheckpoint.timestamp,
+          stickerColor: existingCheckpoint.stickerColor,
+          temperature: existingCheckpoint.temperature
+        }
+      });
+    }
+
     // Determine if within range based on sticker color
     // Green = safe, Yellow = warning but still ok, Red = overheated
     const colorLower = stickerColor.toLowerCase();
@@ -247,17 +266,11 @@ app.post('/scan', async (req, res) => {
       'SELECT checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
     ).all(batchId);
 
-    // Generate appropriate message
-    let message = '✅ Checkpoint logged successfully';
-    if (newStatus === 'INVALIDATED') {
-      if (invalidationReason === 'temperature_exceeded') {
-        message = `⚠️ BATCH INVALIDATED - Temperature ${detectedTemp}°C exceeds safe limit (${batch.optimalTempMax}°C + 5°C = ${maxAllowedTemp}°C)`;
-      } else {
-        message = '⚠️ BATCH INVALIDATED - Heat exposure detected (red sticker)!';
-      }
-    } else if (exceedsTempLimit && colorLower !== 'red') {
-      message = `⚠️ WARNING - Temperature ${detectedTemp}°C is high but within tolerance`;
-    }
+    // Generate appropriate message (for checkpoint view - don't reveal safety status)
+    let message = '✅ Checkpoint data recorded successfully';
+    
+    // Note: We don't reveal invalidation status to checkpoint operators
+    // Only pharmacist and consumer will see the safety status
 
     res.json({
       batchId,
@@ -265,14 +278,13 @@ app.post('/scan', async (req, res) => {
       stickerColor: colorLower,
       temperature: detectedTemp,
       withinRange,
-      batchStatus: newStatus,
-      invalidationReason,
+      batchStatus: newStatus, // Internal use only
+      invalidationReason, // Internal use only
       maxAllowedTemp: batch.optimalTempMax + 5,
-      message,
-      checkpoints: checkpoints.map(cp => ({
-        ...cp,
-        withinRange: cp.withinRange === 1
-      }))
+      message, // Generic success message - no safety details
+      dataRecorded: true,
+      // Don't include checkpoints or safety details for checkpoint view
+      // Those are only visible to pharmacist/consumer
     });
   } catch (error) {
     console.error('Error logging scan:', error);
@@ -415,6 +427,31 @@ app.post('/analyze-color', (req, res) => {
   }
 });
 
+// Generate QR code with temperature (for real-time updates)
+app.post('/qr/generate', async (req, res) => {
+  try {
+    const { batchId, temperature } = req.body;
+
+    if (!batchId) {
+      return res.status(400).json({ error: 'Missing batchId' });
+    }
+
+    // QR payload includes batchId and temperature
+    const qrData = { 
+      type: 'BATCH', 
+      batchId,
+      ...(temperature !== undefined && temperature !== null ? { temperature: Number(temperature) } : {})
+    };
+    
+    const qrCode = await generateQRCode(qrData);
+    
+    res.json({ qrCode, qrData });
+  } catch (error) {
+    console.error('Error generating QR code:', error);
+    res.status(500).json({ error: 'Failed to generate QR code' });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // DATABASE VIEWER ENDPOINT
 // ═══════════════════════════════════════════════════════════════
@@ -462,7 +499,10 @@ app.get('/database/all', (req, res) => {
         ...c,
         withinRange: c.withinRange === 1
       })),
-      tablets
+      tablets,
+      lastUpdated: new Date().toISOString(),
+      checkpointCount: checkpoints.length,
+      batchCount: batches.length
     });
   } catch (error) {
     console.error('Error fetching database data:', error);

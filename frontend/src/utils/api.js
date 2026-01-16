@@ -54,3 +54,16 @@ export async function getTablet(tabletId) {
   return response.json()
 }
 
+export async function generateQRWithTemperature(batchId, temperature) {
+  const response = await fetch(`${API_BASE}/qr/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ batchId, temperature })
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Failed to generate QR code' }))
+    throw new Error(error.error || 'Failed to generate QR code')
+  }
+  return response.json()
+}
+

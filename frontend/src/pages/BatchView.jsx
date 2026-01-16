@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getBatch } from '../utils/api'
+import { getBatch, generateQRWithTemperature } from '../utils/api'
 
 export default function BatchView() {
     const { batchId } = useParams()
@@ -9,6 +9,41 @@ export default function BatchView() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
     const [selectedTemp, setSelectedTemp] = useState(20)
+    const [dynamicQRCode, setDynamicQRCode] = useState(null)
+    const [generatingQR, setGeneratingQR] = useState(false)
+
+    // Temperature ranges and corresponding colors (moved outside conditional)
+    const tempRanges = [
+        { temp: 15, color: '#00ff88', label: 'SAFE - Cold Storage', gradient: 'linear-gradient(135deg, #00ff88 0%, #00cc66 100%)' },
+        { temp: 20, color: '#00ff88', label: 'SAFE - Optimal', gradient: 'linear-gradient(135deg, #00ff88 0%, #00dd77 100%)' },
+        { temp: 25, color: '#00ff88', label: 'SAFE - Room Temp', gradient: 'linear-gradient(135deg, #00ff88 0%, #88ff00 100%)' },
+        { temp: 30, color: '#ffdd00', label: 'WARNING - Upper Safe Limit', gradient: 'linear-gradient(135deg, #88ff00 0%, #ffdd00 100%)' },
+        { temp: 35, color: '#ffaa00', label: 'CAUTION - Near Threshold', gradient: 'linear-gradient(135deg, #ffdd00 0%, #ffaa00 100%)' },
+        { temp: 40, color: '#ff6600', label: 'DANGER - Overheating', gradient: 'linear-gradient(135deg, #ffaa00 0%, #ff6600 100%)' },
+        { temp: 45, color: '#ff0000', label: 'CRITICAL - Heat Damage', gradient: 'linear-gradient(135deg, #ff6600 0%, #ff0000 100%)' },
+    ]
+
+    const getCurrentRange = () => {
+        return tempRanges.find(r => r.temp >= selectedTemp) || tempRanges[tempRanges.length - 1]
+    }
+
+    // Generate QR code with temperature in real-time
+    const updateQRCode = useCallback(async (temp) => {
+        if (!batch?.batchId) return
+
+        try {
+            setGeneratingQR(true)
+            const data = await generateQRWithTemperature(batch.batchId, temp)
+            if (data.qrCode) {
+                setDynamicQRCode(data.qrCode)
+            }
+        } catch (err) {
+            console.error('Error generating QR:', err)
+            // Keep existing QR code on error
+        } finally {
+            setGeneratingQR(false)
+        }
+    }, [batch?.batchId])
 
     useEffect(() => {
         const fetchBatch = async () => {
@@ -22,6 +57,24 @@ export default function BatchView() {
                 setLoading(true)
                 const batchData = await getBatch(batchId)
                 setBatch(batchData)
+                // Generate initial QR code with default temperature immediately
+                if (batchData.batchId) {
+                    try {
+                        const qrData = await generateQRWithTemperature(batchData.batchId, selectedTemp)
+                        if (qrData.qrCode) {
+                            setDynamicQRCode(qrData.qrCode)
+                        } else if (batchData.qrCode) {
+                            // Fallback to batch QR code if generation fails
+                            setDynamicQRCode(batchData.qrCode)
+                        }
+                    } catch (qrErr) {
+                        console.warn('Initial QR generation failed, using batch QR:', qrErr)
+                        // Fallback to batch QR code
+                        if (batchData.qrCode) {
+                            setDynamicQRCode(batchData.qrCode)
+                        }
+                    }
+                }
             } catch (err) {
                 setError(err.message || 'Failed to load batch')
             } finally {
@@ -31,6 +84,17 @@ export default function BatchView() {
 
         fetchBatch()
     }, [batchId])
+
+    // Generate QR when batch loads or temperature changes (with debounce)
+    useEffect(() => {
+        if (!batch?.batchId) return
+
+        const timeoutId = setTimeout(() => {
+            updateQRCode(selectedTemp)
+        }, 300) // Debounce 300ms to avoid too many requests
+
+        return () => clearTimeout(timeoutId)
+    }, [batch?.batchId, selectedTemp, updateQRCode])
 
     if (loading) {
         return (
@@ -62,21 +126,6 @@ export default function BatchView() {
         )
     }
 
-    // Temperature ranges and corresponding colors
-    const tempRanges = [
-        { temp: 15, color: '#00ff88', label: 'SAFE - Cold Storage', gradient: 'linear-gradient(135deg, #00ff88 0%, #00cc66 100%)' },
-        { temp: 20, color: '#00ff88', label: 'SAFE - Optimal', gradient: 'linear-gradient(135deg, #00ff88 0%, #00dd77 100%)' },
-        { temp: 25, color: '#00ff88', label: 'SAFE - Room Temp', gradient: 'linear-gradient(135deg, #00ff88 0%, #88ff00 100%)' },
-        { temp: 30, color: '#ffdd00', label: 'WARNING - Upper Safe Limit', gradient: 'linear-gradient(135deg, #88ff00 0%, #ffdd00 100%)' },
-        { temp: 35, color: '#ffaa00', label: 'CAUTION - Near Threshold', gradient: 'linear-gradient(135deg, #ffdd00 0%, #ffaa00 100%)' },
-        { temp: 40, color: '#ff6600', label: 'DANGER - Overheating', gradient: 'linear-gradient(135deg, #ffaa00 0%, #ff6600 100%)' },
-        { temp: 45, color: '#ff0000', label: 'CRITICAL - Heat Damage', gradient: 'linear-gradient(135deg, #ff6600 0%, #ff0000 100%)' },
-    ]
-
-    const getCurrentRange = () => {
-        return tempRanges.find(r => r.temp >= selectedTemp) || tempRanges[tempRanges.length - 1]
-    }
-
     const currentRange = getCurrentRange()
 
     return (
@@ -88,9 +137,9 @@ export default function BatchView() {
                     <p className="text-secondary">Batch ID: {batch.batchId}</p>
                 </header>
 
-                <div style={{ 
-                    display: 'grid', 
-                    gridTemplateColumns: '1fr', 
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr',
                     gap: '1.5rem',
                     maxWidth: '1000px',
                     margin: '0 auto'
@@ -119,7 +168,12 @@ export default function BatchView() {
                         </div>
 
                         <div style={{ marginBottom: '1.5rem', textAlign: 'center' }}>
-                            <p className="text-muted" style={{ fontSize: '0.875rem', marginBottom: '1rem' }}>Scan Target</p>
+                            <p className="text-muted" style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>
+                                Scan Target
+                            </p>
+                            <p className="text-secondary" style={{ fontSize: '0.75rem', marginBottom: '1rem', fontStyle: 'italic' }}>
+                                QR code updates in real-time with temperature: <strong>{selectedTemp}°C</strong>
+                            </p>
                             <div className="scan-target" style={{
                                 background: 'white',
                                 padding: '1.5rem',
@@ -128,10 +182,29 @@ export default function BatchView() {
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 gap: '2rem',
-                                border: '1px solid #e0e0e0',
-                                flexWrap: 'wrap'
+                                flexWrap: 'wrap',
+                                width: '100%',
+                                position: 'relative',
                             }}>
-                                <img src={batch.qrCode} alt="Batch QR Code" className="scan-item" style={{ flexShrink: 0 }} />
+                                {dynamicQRCode ? (
+                                    <img
+                                        src={dynamicQRCode}
+                                        alt={`Batch QR Code (${selectedTemp}°C)`}
+                                        className="scan-item"
+                                        style={{ flexShrink: 0 }}
+                                    />
+                                ) : (
+                                    <div className="scan-item" style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        background: '#f0f0f0',
+                                        color: '#999',
+
+                                    }}>
+                                        {generatingQR ? 'Generating...' : 'Loading QR...'}
+                                    </div>
+                                )}
 
                                 {/* Sticker Visual */}
                                 <div className="scan-item" style={{
@@ -142,64 +215,22 @@ export default function BatchView() {
                                     alignItems: 'center',
                                     justifyContent: 'center',
                                     flexShrink: 0,
-                                    transition: 'all 0.3s ease'
+                                    transition: 'all 0.3s ease',
+                                    height: '100px',
+                                    width: '100px',
+                                    position: 'absolute',
+                                    top: '50%',
+                                    left: '50%',
+                                    transform: 'translate(-50%, -50%)',
                                 }}>
                                     <span className="scan-text" style={{ color: '#1a1a1a', fontWeight: '800' }}>
-                                        {selectedTemp}°
+                                        {/* {selectedTemp}° */}
                                     </span>
                                 </div>
                             </div>
                             <p className="text-muted mt-3" style={{ fontSize: '0.8rem' }}>
                                 Scan both simultaneously using the Checkpoint Scanner.
                             </p>
-                        </div>
-
-                    </div>
-
-                    {/* Right Column: Sticker Simulation */}
-                    <div className="card">
-                        <h2 className="card-title">🎛️ Temperature Sticker Simulation</h2>
-                        <p className="text-secondary mb-4">
-                            Adjust temperature to see the sticker color change in real-time.
-                        </p>
-
-                        <div style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            marginBottom: '2rem'
-                        }}>
-                            {/* Sticker Visualization */}
-                            <div style={{
-                                width: '200px',
-                                height: '200px',
-                                borderRadius: '50%',
-                                background: currentRange.gradient,
-                                boxShadow: `0 0 60px ${currentRange.color}40, 0 0 120px ${currentRange.color}20`,
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                position: 'relative',
-                                border: '8px solid rgba(255, 255, 255, 0.1)',
-                                transition: 'all 0.5s ease',
-                                marginBottom: '1.5rem'
-                            }}>
-                                <span style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#0a0f1c' }}>
-                                    {selectedTemp}°C
-                                </span>
-                            </div>
-
-                            <div style={{
-                                padding: '0.5rem 1rem',
-                                borderRadius: '6px',
-                                background: `${currentRange.color}20`,
-                                color: currentRange.color,
-                                fontWeight: 'bold',
-                                border: `1px solid ${currentRange.color}`
-                            }}>
-                                {currentRange.label}
-                            </div>
                         </div>
 
                         <div style={{ marginTop: 'auto' }}>
@@ -227,6 +258,7 @@ export default function BatchView() {
                                 <span>50°C</span>
                             </div>
                         </div>
+
                     </div>
                 </div>
 
@@ -291,8 +323,8 @@ export default function BatchView() {
 
                     @media (min-width: 600px) {
                         .scan-item {
-                            width: 220px;
-                            height: 220px;
+                            width: 450px;
+                            height: 450px;
                         }
                         .scan-text {
                             font-size: 3rem;

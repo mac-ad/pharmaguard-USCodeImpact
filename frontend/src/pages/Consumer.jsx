@@ -1,48 +1,62 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQRScanner } from '../hooks/useQRScanner'
-import { getTablet, getBatch } from '../utils/api'
+import { getTablet } from '../utils/api'
 
 export default function Consumer() {
   const [step, setStep] = useState('scan') // 'scan', 'result'
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const scannerRef = useRef(null)
 
   // QR Scanner
   const handleQRResult = useCallback(async (data, rawText) => {
     try {
-      let productInfo = null
-
-      // Handle tablet QR
-      if (data.type === 'TABLET' && data.tabletId) {
-        productInfo = await getTablet(data.tabletId)
-      } 
-      // Handle batch QR (direct scan)
-      else if (data.type === 'BATCH' && data.batchId) {
-        const batch = await getBatch(data.batchId)
-        productInfo = {
-          tabletId: null,
-          batchId: batch.batchId,
-          medicineName: batch.medicineName,
-          batchStatus: batch.status,
-          consumerStatus: batch.status === 'INVALIDATED' ? 'HEAT_DAMAGED' : 'SAFE',
-          consumerMessage: batch.status === 'INVALIDATED' 
-            ? '⚠️ GENUINE but HEAT-DAMAGED - This medicine was exposed to unsafe temperatures during transport. Do not use.'
-            : '✅ GENUINE & SAFE - This medicine has been properly stored throughout its journey.',
-          journey: batch.checkpoints
+      // Only accept tablet QR codes - reject batch QR codes
+      if (data.type === 'BATCH' && data.batchId) {
+        setError('⚠️ This is a batch QR code. Please scan the tablet QR code on your medicine package instead.')
+        if (scannerRef.current) {
+          scannerRef.current.stopScanning()
+          setTimeout(() => {
+            scannerRef.current?.startScanning()
+          }, 2000)
         }
+        return
       }
 
-      if (productInfo) {
-        setResult(productInfo)
-        qrScanner.stopScanning()
-        setStep('result')
+      // Handle tablet QR only
+      if (data.type === 'TABLET' && data.tabletId) {
+        const productInfo = await getTablet(data.tabletId)
+        if (productInfo) {
+          setResult(productInfo)
+          if (scannerRef.current) {
+            scannerRef.current.stopScanning()
+          }
+          setStep('result')
+        }
+      } else {
+        setError('Invalid QR code. Please scan the tablet QR code on your medicine package.')
+        if (scannerRef.current) {
+          setTimeout(() => {
+            scannerRef.current?.startScanning()
+          }, 2000)
+        }
       }
     } catch (err) {
       setError('Product not found. Please try again.')
+      if (scannerRef.current) {
+        setTimeout(() => {
+          scannerRef.current?.startScanning()
+        }, 2000)
+      }
     }
   }, [])
 
   const qrScanner = useQRScanner(handleQRResult)
+  
+  // Update scanner ref when qrScanner changes
+  useEffect(() => {
+    scannerRef.current = qrScanner
+  }, [qrScanner])
 
   // Start scanning
   const startScan = () => {
@@ -78,10 +92,20 @@ export default function Consumer() {
         {/* QR Scanning */}
         {step === 'scan' && (
           <div className="card">
-            <h3 className="mb-2 text-center">Scan Medicine QR Code</h3>
+            <h3 className="mb-2 text-center">Scan Tablet QR Code</h3>
             <p className="text-muted text-center mb-2" style={{ fontSize: '0.875rem' }}>
-              Point your camera at the QR code on your medicine package
+              Point your camera at the <strong>tablet QR code</strong> on your medicine package
             </p>
+            <div className="card mb-2" style={{ 
+              background: 'rgba(99, 102, 241, 0.1)', 
+              border: '1px solid rgba(99, 102, 241, 0.2)',
+              padding: '0.75rem',
+              fontSize: '0.875rem'
+            }}>
+              <p className="text-muted" style={{ margin: 0, textAlign: 'center' }}>
+                ℹ️ Only tablet QR codes can be scanned here. Batch QR codes are for supply chain tracking only.
+              </p>
+            </div>
             
             <div className="camera-container">
               <video 
