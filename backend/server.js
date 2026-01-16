@@ -198,7 +198,18 @@ app.post('/scan', async (req, res) => {
     // Determine if within range based on sticker color
     // Green = safe, Yellow = warning but still ok, Red = overheated
     const colorLower = stickerColor.toLowerCase();
-    const withinRange = colorLower !== 'red';
+
+    // Default temperature if not provided (estimate from color)
+    const detectedTemp = temperature !== undefined && temperature !== null
+      ? Number(temperature)
+      : (colorLower === 'red' ? 45 : colorLower === 'yellow' ? 30 : 20);
+
+    // Check temperature-based invalidation: if temp > (optimalTempMax + 5), invalidate
+    const maxAllowedTemp = batch.optimalTempMax + 5;
+    const exceedsTempLimit = detectedTemp > maxAllowedTemp;
+
+    // Determine if within range: either color is red OR temperature exceeds limit
+    const withinRange = colorLower !== 'red' && !exceedsTempLimit;
 
     // Log checkpoint
     const timestamp = new Date().toISOString();
@@ -206,20 +217,29 @@ app.post('/scan', async (req, res) => {
       INSERT INTO checkpoints (batchId, checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    
+
     // Default values if missing
     const latIdx = latitude || null;
     const lngIdx = longitude || null;
-    const tempIdx = temperature !== undefined ? temperature : (colorLower === 'red' ? 45 : colorLower === 'yellow' ? 30 : 20);
 
-    insertStmt.run(batchId, checkpoint, colorLower, withinRange ? 1 : 0, timestamp, latIdx, lngIdx, tempIdx);
+    insertStmt.run(batchId, checkpoint, colorLower, withinRange ? 1 : 0, timestamp, latIdx, lngIdx, detectedTemp);
 
-    // Auto-invalidate if red sticker detected
+    // Auto-invalidate if red sticker detected OR temperature exceeds limit
     let newStatus = batch.status;
-    if (colorLower === 'red' && batch.status !== 'INVALIDATED') {
-      const updateStmt = db.prepare('UPDATE batches SET status = ? WHERE batchId = ?');
-      updateStmt.run('INVALIDATED', batchId);
-      newStatus = 'INVALIDATED';
+    let invalidationReason = null;
+
+    if (batch.status !== 'INVALIDATED') {
+      if (colorLower === 'red') {
+        const updateStmt = db.prepare('UPDATE batches SET status = ? WHERE batchId = ?');
+        updateStmt.run('INVALIDATED', batchId);
+        newStatus = 'INVALIDATED';
+        invalidationReason = 'red_sticker';
+      } else if (exceedsTempLimit) {
+        const updateStmt = db.prepare('UPDATE batches SET status = ? WHERE batchId = ?');
+        updateStmt.run('INVALIDATED', batchId);
+        newStatus = 'INVALIDATED';
+        invalidationReason = 'temperature_exceeded';
+      }
     }
 
     // Get updated checkpoints
@@ -227,13 +247,28 @@ app.post('/scan', async (req, res) => {
       'SELECT checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
     ).all(batchId);
 
+    // Generate appropriate message
+    let message = '✅ Checkpoint logged successfully';
+    if (newStatus === 'INVALIDATED') {
+      if (invalidationReason === 'temperature_exceeded') {
+        message = `⚠️ BATCH INVALIDATED - Temperature ${detectedTemp}°C exceeds safe limit (${batch.optimalTempMax}°C + 5°C = ${maxAllowedTemp}°C)`;
+      } else {
+        message = '⚠️ BATCH INVALIDATED - Heat exposure detected (red sticker)!';
+      }
+    } else if (exceedsTempLimit && colorLower !== 'red') {
+      message = `⚠️ WARNING - Temperature ${detectedTemp}°C is high but within tolerance`;
+    }
+
     res.json({
       batchId,
       checkpoint,
       stickerColor: colorLower,
+      temperature: detectedTemp,
       withinRange,
       batchStatus: newStatus,
-      message: colorLower === 'red' ? '⚠️ BATCH INVALIDATED - Heat exposure detected!' : '✅ Checkpoint logged successfully',
+      invalidationReason,
+      maxAllowedTemp: batch.optimalTempMax + 5,
+      message,
       checkpoints: checkpoints.map(cp => ({
         ...cp,
         withinRange: cp.withinRange === 1
@@ -274,7 +309,7 @@ app.post('/tablet', async (req, res) => {
 
     for (let i = 0; i < Math.min(count, 100); i++) {
       const tabletId = `PG-TAB-${uuidv4().slice(0, 6).toUpperCase()}`;
-      
+
       const stmt = db.prepare(`
         INSERT INTO tablets (tabletId, batchId, createdAt)
         VALUES (?, ?, ?)
@@ -315,9 +350,9 @@ app.get('/tablet/:id', async (req, res) => {
       return res.status(404).json({ error: 'Associated batch not found' });
     }
 
-    // Get checkpoints
+    // Get checkpoints with temperature
     const checkpoints = db.prepare(
-      'SELECT checkpoint, stickerColor, withinRange, timestamp FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
+      'SELECT checkpoint, stickerColor, withinRange, timestamp, temperature FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
     ).all(tablet.batchId);
 
     // Determine consumer message
@@ -335,13 +370,16 @@ app.get('/tablet/:id', async (req, res) => {
       batchId: tablet.batchId,
       medicineName: batch.medicineName,
       batchStatus: batch.status,
+      optimalTempMin: batch.optimalTempMin,
+      optimalTempMax: batch.optimalTempMax,
       consumerStatus,
       consumerMessage,
       journey: checkpoints.map(cp => ({
         checkpoint: cp.checkpoint,
         stickerColor: cp.stickerColor,
         withinRange: cp.withinRange === 1,
-        timestamp: cp.timestamp
+        timestamp: cp.timestamp,
+        temperature: cp.temperature
       }))
     });
   } catch (error) {
@@ -386,15 +424,15 @@ app.get('/database/all', (req, res) => {
   try {
     // Get all batches
     const batches = db.prepare('SELECT * FROM batches ORDER BY createdAt DESC').all();
-    
-    // Get all checkpoints
+
+    // Get all checkpoints (including temperature)
     const checkpoints = db.prepare(`
-      SELECT c.*, b.medicineName 
+      SELECT c.*, b.medicineName, b.optimalTempMin, b.optimalTempMax
       FROM checkpoints c 
       LEFT JOIN batches b ON c.batchId = b.batchId 
       ORDER BY c.timestamp DESC
     `).all();
-    
+
     // Get all tablets
     const tablets = db.prepare(`
       SELECT t.*, b.medicineName, b.status as batchStatus 
@@ -402,7 +440,7 @@ app.get('/database/all', (req, res) => {
       LEFT JOIN batches b ON t.batchId = b.batchId 
       ORDER BY t.createdAt DESC
     `).all();
-    
+
     // Calculate statistics
     const stats = {
       totalBatches: batches.length,
@@ -413,7 +451,7 @@ app.get('/database/all', (req, res) => {
       safeCheckpoints: checkpoints.filter(c => c.withinRange === 1).length,
       warningCheckpoints: checkpoints.filter(c => c.withinRange === 0).length
     };
-    
+
     res.json({
       stats,
       batches: batches.map(b => ({
@@ -439,10 +477,10 @@ app.delete('/database/clear', (req, res) => {
     db.prepare('DELETE FROM checkpoints').run();
     db.prepare('DELETE FROM tablets').run();
     db.prepare('DELETE FROM batches').run();
-    
-    res.json({ 
-      success: true, 
-      message: 'All database data cleared successfully' 
+
+    res.json({
+      success: true,
+      message: 'All database data cleared successfully'
     });
   } catch (error) {
     console.error('Error clearing database:', error);

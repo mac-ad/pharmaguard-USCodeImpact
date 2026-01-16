@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '../utils/api'
 
 function DatabaseViewer() {
+    const navigate = useNavigate()
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
@@ -10,6 +12,7 @@ function DatabaseViewer() {
     const [selectedBatch, setSelectedBatch] = useState(null)
     const [showModal, setShowModal] = useState(false)
     const [loadingBatch, setLoadingBatch] = useState(false)
+    const [viewMode, setViewMode] = useState('batches') // 'batches' or 'checkpoints'
 
     useEffect(() => {
         fetchData()
@@ -115,6 +118,11 @@ function DatabaseViewer() {
     const filteredBatches = filterData(data.batches, ['batchId', 'medicineName', 'status'])
     const filteredCheckpoints = filterData(data.checkpoints, ['batchId', 'checkpoint', 'stickerColor', 'medicineName'])
     const filteredTablets = filterData(data.tablets, ['tabletId', 'batchId', 'medicineName'])
+    
+    // Get checkpoints for selected batch
+    const batchCheckpoints = selectedBatch 
+        ? data.checkpoints.filter(cp => cp.batchId === selectedBatch.batchId)
+        : []
 
     return (
         <div className="page">
@@ -190,7 +198,11 @@ function DatabaseViewer() {
                     paddingBottom: '0.5rem'
                 }}>
                     <button
-                        onClick={() => setActiveTab('batches')}
+                        onClick={() => {
+                            setActiveTab('batches')
+                            setViewMode('batches')
+                            setSelectedBatch(null)
+                        }}
                         style={{
                             padding: '0.75rem 1.5rem',
                             background: activeTab === 'batches' ? 'rgba(0, 255, 136, 0.2)' : 'transparent',
@@ -206,7 +218,11 @@ function DatabaseViewer() {
                         📦 Batches ({filteredBatches.length})
                     </button>
                     <button
-                        onClick={() => setActiveTab('checkpoints')}
+                        onClick={() => {
+                            setActiveTab('checkpoints')
+                            setViewMode('batches')
+                            setSelectedBatch(null)
+                        }}
                         style={{
                             padding: '0.75rem 1.5rem',
                             background: activeTab === 'checkpoints' ? 'rgba(0, 255, 136, 0.2)' : 'transparent',
@@ -222,7 +238,11 @@ function DatabaseViewer() {
                         📍 Checkpoints ({filteredCheckpoints.length})
                     </button>
                     <button
-                        onClick={() => setActiveTab('tablets')}
+                        onClick={() => {
+                            setActiveTab('tablets')
+                            setViewMode('batches')
+                            setSelectedBatch(null)
+                        }}
                         style={{
                             padding: '0.75rem 1.5rem',
                             background: activeTab === 'tablets' ? 'rgba(0, 255, 136, 0.2)' : 'transparent',
@@ -240,7 +260,7 @@ function DatabaseViewer() {
                 </div>
 
                 {/* Batches Table */}
-                {activeTab === 'batches' && (
+                {activeTab === 'batches' && viewMode === 'batches' && (
                     <div className="card">
                         <h3 style={{ marginBottom: '1.5rem' }}>📦 Batches</h3>
                         {filteredBatches.length === 0 ? (
@@ -255,6 +275,7 @@ function DatabaseViewer() {
                                             <th>Temp Range</th>
                                             <th>Status</th>
                                             <th>Created</th>
+                                            <th>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -276,6 +297,57 @@ function DatabaseViewer() {
                                                     </span>
                                                 </td>
                                                 <td>{formatDate(batch.createdAt)}</td>
+                                                <td>
+                                                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                                        <button
+                                                            onClick={() => {
+                                                                setSelectedBatch(batch)
+                                                                setViewMode('checkpoints')
+                                                            }}
+                                                            style={{
+                                                                padding: '0.5rem 1rem',
+                                                                background: 'rgba(0, 255, 136, 0.2)',
+                                                                border: '1px solid #00ff88',
+                                                                borderRadius: '6px',
+                                                                color: '#00ff88',
+                                                                cursor: 'pointer',
+                                                                fontSize: '0.85rem',
+                                                                fontWeight: 'bold',
+                                                                transition: 'all 0.2s ease'
+                                                            }}
+                                                            onMouseEnter={(e) => {
+                                                                e.target.style.background = 'rgba(0, 255, 136, 0.3)'
+                                                            }}
+                                                            onMouseLeave={(e) => {
+                                                                e.target.style.background = 'rgba(0, 255, 136, 0.2)'
+                                                            }}
+                                                        >
+                                                            View Checkpoints →
+                                                        </button>
+                                                        <button
+                                                            onClick={() => navigate(`/batch/${batch.batchId}`)}
+                                                            style={{
+                                                                padding: '0.5rem 1rem',
+                                                                background: 'rgba(99, 102, 241, 0.2)',
+                                                                border: '1px solid #6366f1',
+                                                                borderRadius: '6px',
+                                                                color: '#818cf8',
+                                                                cursor: 'pointer',
+                                                                fontSize: '0.85rem',
+                                                                fontWeight: 'bold',
+                                                                transition: 'all 0.2s ease'
+                                                            }}
+                                                            onMouseEnter={(e) => {
+                                                                e.target.style.background = 'rgba(99, 102, 241, 0.3)'
+                                                            }}
+                                                            onMouseLeave={(e) => {
+                                                                e.target.style.background = 'rgba(99, 102, 241, 0.2)'
+                                                            }}
+                                                        >
+                                                            📦 View QR & Sticker
+                                                        </button>
+                                                    </div>
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -285,10 +357,133 @@ function DatabaseViewer() {
                     </div>
                 )}
 
-                {/* Checkpoints Table */}
+                {/* Batch Checkpoints View */}
+                {activeTab === 'batches' && viewMode === 'checkpoints' && selectedBatch && (
+                    <div className="card">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                            <button
+                                onClick={() => {
+                                    setSelectedBatch(null)
+                                    setViewMode('batches')
+                                }}
+                                style={{
+                                    padding: '0.5rem 1rem',
+                                    background: 'rgba(255, 255, 255, 0.1)',
+                                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                                    borderRadius: '6px',
+                                    color: '#fff',
+                                    cursor: 'pointer',
+                                    fontSize: '0.9rem',
+                                    fontWeight: 'bold'
+                                }}
+                            >
+                                ← Back to Batches
+                            </button>
+                            <div style={{ flex: 1 }}>
+                                <h3 style={{ margin: 0 }}>📍 Checkpoints for {selectedBatch.batchId}</h3>
+                                <p style={{ margin: '0.25rem 0 0 0', opacity: 0.7, fontSize: '0.9rem' }}>
+                                    {selectedBatch.medicineName} • Temp Range: {selectedBatch.optimalTempMin}°C - {selectedBatch.optimalTempMax}°C
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => navigate(`/batch/${selectedBatch.batchId}`)}
+                                style={{
+                                    padding: '0.5rem 1rem',
+                                    background: 'rgba(99, 102, 241, 0.2)',
+                                    border: '1px solid #6366f1',
+                                    borderRadius: '6px',
+                                    color: '#818cf8',
+                                    cursor: 'pointer',
+                                    fontSize: '0.9rem',
+                                    fontWeight: 'bold',
+                                    transition: 'all 0.2s ease'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.target.style.background = 'rgba(99, 102, 241, 0.3)'
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.target.style.background = 'rgba(99, 102, 241, 0.2)'
+                                }}
+                            >
+                                📦 View QR & Sticker
+                            </button>
+                        </div>
+                        {batchCheckpoints.length === 0 ? (
+                            <p style={{ textAlign: 'center', opacity: 0.5, padding: '2rem' }}>No checkpoints found for this batch</p>
+                        ) : (
+                            <div style={{ overflowX: 'auto' }}>
+                                <table className="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Checkpoint</th>
+                                            <th>Sticker Color</th>
+                                            <th>Temperature</th>
+                                            <th>Status</th>
+                                            <th>Timestamp</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {batchCheckpoints.map((cp, idx) => (
+                                            <tr key={idx}>
+                                                <td><strong>{cp.checkpoint}</strong></td>
+                                                <td>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                        <div style={{
+                                                            width: '20px',
+                                                            height: '20px',
+                                                            borderRadius: '50%',
+                                                            background: getColorBadge(cp.stickerColor),
+                                                            border: '2px solid rgba(255, 255, 255, 0.2)'
+                                                        }} />
+                                                        <span style={{ textTransform: 'capitalize' }}>{cp.stickerColor}</span>
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    {cp.temperature !== null && cp.temperature !== undefined ? (
+                                                        <div style={{ 
+                                                            display: 'flex', 
+                                                            alignItems: 'center', 
+                                                            gap: '0.5rem',
+                                                            color: cp.temperature > (selectedBatch.optimalTempMax + 5) ? '#ff0000' : 
+                                                                   cp.temperature > selectedBatch.optimalTempMax ? '#ffdd00' : '#00ff88',
+                                                            fontWeight: cp.temperature > selectedBatch.optimalTempMax ? 600 : 400
+                                                        }}>
+                                                            <span>🌡️</span>
+                                                            <span>{cp.temperature}°C</span>
+                                                            {cp.temperature > (selectedBatch.optimalTempMax + 5) && (
+                                                                <span style={{ fontSize: '0.75rem', color: '#ff0000' }}>⚠️ Exceeded</span>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <span style={{ opacity: 0.5 }}>N/A</span>
+                                                    )}
+                                                </td>
+                                                <td>
+                                                    <span style={{
+                                                        padding: '0.25rem 0.75rem',
+                                                        borderRadius: '6px',
+                                                        background: cp.withinRange ? 'rgba(0, 255, 136, 0.2)' : 'rgba(255, 0, 0, 0.2)',
+                                                        color: cp.withinRange ? '#00ff88' : '#ff0000',
+                                                        fontSize: '0.85rem',
+                                                        fontWeight: 'bold'
+                                                    }}>
+                                                        {cp.withinRange ? 'SAFE' : 'ALERT'}
+                                                    </span>
+                                                </td>
+                                                <td>{formatDate(cp.timestamp)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Checkpoints Table (Legacy - all checkpoints view) */}
                 {activeTab === 'checkpoints' && (
                     <div className="card">
-                        <h3 style={{ marginBottom: '1.5rem' }}>📍 Checkpoints</h3>
+                        <h3 style={{ marginBottom: '1.5rem' }}>📍 All Checkpoints</h3>
                         {filteredCheckpoints.length === 0 ? (
                             <p style={{ textAlign: 'center', opacity: 0.5, padding: '2rem' }}>No checkpoints found</p>
                         ) : (
@@ -300,6 +495,7 @@ function DatabaseViewer() {
                                             <th>Medicine</th>
                                             <th>Checkpoint</th>
                                             <th>Sticker Color</th>
+                                            <th>Temperature</th>
                                             <th>Status</th>
                                             <th>Timestamp</th>
                                         </tr>
@@ -321,6 +517,26 @@ function DatabaseViewer() {
                                                         }} />
                                                         <span style={{ textTransform: 'capitalize' }}>{cp.stickerColor}</span>
                                                     </div>
+                                                </td>
+                                                <td>
+                                                    {cp.temperature !== null && cp.temperature !== undefined ? (
+                                                        <div style={{ 
+                                                            display: 'flex', 
+                                                            alignItems: 'center', 
+                                                            gap: '0.5rem',
+                                                            color: cp.optimalTempMax && cp.temperature > (cp.optimalTempMax + 5) ? '#ff0000' : 
+                                                                   cp.optimalTempMax && cp.temperature > cp.optimalTempMax ? '#ffdd00' : '#00ff88',
+                                                            fontWeight: cp.optimalTempMax && cp.temperature > cp.optimalTempMax ? 600 : 400
+                                                        }}>
+                                                            <span>🌡️</span>
+                                                            <span>{cp.temperature}°C</span>
+                                                            {cp.optimalTempMax && cp.temperature > (cp.optimalTempMax + 5) && (
+                                                                <span style={{ fontSize: '0.75rem', color: '#ff0000' }}>⚠️</span>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <span style={{ opacity: 0.5 }}>N/A</span>
+                                                    )}
                                                 </td>
                                                 <td>
                                                     <span style={{

@@ -15,14 +15,14 @@ const CHECKPOINTS = [
 export default function Checkpoint() {
   // State
   const [currentCheckpoint, setCurrentCheckpoint] = useState(0)
-  const [step, setStep] = useState('select') // 'select', 'scanQR', 'scanSticker', 'result'
+  const [step, setStep] = useState('select') // 'select', 'scanQR', 'scanSticker', 'enterTemp', 'result'
   const [scannedBatch, setScannedBatch] = useState(null)
   const [detectedColor, setDetectedColor] = useState(null)
+  const [temperature, setTemperature] = useState('')
   const [scanResult, setScanResult] = useState(null)
   const [error, setError] = useState(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
 
-  // QR Scanner
   // QR Scanner
   const handleQRResult = useCallback(async (data, rawText, videoElement) => {
     if (data.type === 'BATCH' && data.batchId) {
@@ -45,35 +45,13 @@ export default function Checkpoint() {
         setScannedBatch(batch)
         setDetectedColor(colorResult)
 
-        // 3. Get Geolocation
-        let latitude = null
-        let longitude = null
-        try {
-          const pos = await new Promise((resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3000 })
-          })
-          latitude = pos.coords.latitude
-          longitude = pos.coords.longitude
-        } catch (e) {
-          console.warn('Geolocation failed or timed out', e)
-        }
-
-        // 4. Estimate Temperature
+        // 3. Estimate Temperature from color (as default)
         const tempMap = { green: 22, yellow: 32, red: 45 }
         const estimatedTemp = tempMap[colorResult.color] || 25
+        setTemperature(estimatedTemp.toString())
 
-        // 5. Log scan result
-        const result = await logScan({
-          batchId: batch.batchId,
-          checkpoint: CHECKPOINTS[currentCheckpoint],
-          stickerColor: colorResult.color,
-          latitude,
-          longitude,
-          temperature: estimatedTemp
-        })
-
-        setScanResult(result)
-        setStep('result')
+        // 4. Move to temperature input step
+        setStep('enterTemp')
       } catch (err) {
         setError('Processing failed: ' + err.message)
       }
@@ -94,10 +72,54 @@ export default function Checkpoint() {
 
 
 
+  // Submit scan with temperature
+  const submitScan = async () => {
+    if (!scannedBatch || !temperature) {
+      setError('Please enter temperature')
+      return
+    }
+
+    setError(null)
+    setIsAnalyzing(true)
+
+    try {
+      // Get Geolocation
+      let latitude = null
+      let longitude = null
+      try {
+        const pos = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3000 })
+        })
+        latitude = pos.coords.latitude
+        longitude = pos.coords.longitude
+      } catch (e) {
+        console.warn('Geolocation failed or timed out', e)
+      }
+
+      // Log scan result
+      const result = await logScan({
+        batchId: scannedBatch.batchId,
+        checkpoint: CHECKPOINTS[currentCheckpoint],
+        stickerColor: detectedColor?.color || 'unknown',
+        latitude,
+        longitude,
+        temperature: Number(temperature)
+      })
+
+      setScanResult(result)
+      setStep('result')
+    } catch (err) {
+      setError('Failed to log scan: ' + err.message)
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
   // Reset and scan next
   const resetForNext = () => {
     setScannedBatch(null)
     setDetectedColor(null)
+    setTemperature('')
     setScanResult(null)
     setError(null)
     setStep('select')
@@ -203,7 +225,105 @@ export default function Checkpoint() {
           </div>
         )}
 
+        {/* Temperature Input */}
+        {step === 'enterTemp' && scannedBatch && (
+          <div className="card">
+            <div className="flex-between mb-2">
+              <h3>Enter Temperature</h3>
+              <span className="status-badge status-warning">
+                {CHECKPOINTS[currentCheckpoint]}
+              </span>
+            </div>
 
+            <div style={{ 
+              background: 'var(--bg-secondary)', 
+              borderRadius: 'var(--radius-md)', 
+              padding: '1rem',
+              marginBottom: '1.5rem'
+            }}>
+              <p className="text-muted" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>BATCH</p>
+              <p className="mono" style={{ fontWeight: 600 }}>{scannedBatch.batchId}</p>
+              <p className="text-secondary" style={{ fontSize: '0.875rem' }}>{scannedBatch.medicineName}</p>
+              <div className="mt-2" style={{ fontSize: '0.875rem' }}>
+                <span className="text-muted">Safe Range: </span>
+                <span>{scannedBatch.optimalTempMin}°C – {scannedBatch.optimalTempMax}°C</span>
+                <br />
+                <span className="text-muted">Max Allowed: </span>
+                <span className="text-warning">{scannedBatch.optimalTempMax + 5}°C</span>
+                <span className="text-muted" style={{ fontSize: '0.75rem' }}> (max + 5°C)</span>
+              </div>
+            </div>
+
+            {detectedColor && (
+              <div className="card mb-2" style={{ 
+                background: 'rgba(99, 102, 241, 0.1)', 
+                border: '1px solid rgba(99, 102, 241, 0.2)'
+              }}>
+                <div className="flex-between">
+                  <span className="text-secondary">Detected Sticker Color:</span>
+                  <span style={{ fontSize: '1.5rem' }}>
+                    {detectedColor.color === 'green' ? '🟢' : detectedColor.color === 'yellow' ? '🟡' : detectedColor.color === 'red' ? '🔴' : '⚪'}
+                  </span>
+                </div>
+                <p className="text-muted mt-1" style={{ fontSize: '0.75rem' }}>
+                  Estimated temperature: {temperature}°C (based on color)
+                </p>
+              </div>
+            )}
+
+            <div className="input-group">
+              <label htmlFor="temperature">Temperature (°C)</label>
+              <input
+                type="number"
+                id="temperature"
+                className="input"
+                placeholder="Enter detected temperature"
+                value={temperature}
+                onChange={(e) => setTemperature(e.target.value)}
+                step="0.1"
+                min="-50"
+                max="100"
+                required
+              />
+              <p className="text-muted mt-1" style={{ fontSize: '0.75rem' }}>
+                Enter the actual temperature detected. If temperature exceeds {scannedBatch.optimalTempMax + 5}°C, batch will be invalidated.
+              </p>
+            </div>
+
+            {error && (
+              <div className="card mt-2" style={{ 
+                background: 'rgba(239, 68, 68, 0.1)', 
+                border: '1px solid rgba(239, 68, 68, 0.3)'
+              }}>
+                <p className="text-danger">{error}</p>
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-3">
+              <button 
+                onClick={submitScan}
+                disabled={isAnalyzing || !temperature}
+                className="btn btn-primary btn-lg"
+                style={{ flex: 1 }}
+              >
+                {isAnalyzing ? (
+                  <>
+                    <span className="loader" style={{ width: 20, height: 20, borderWidth: 2 }}></span>
+                    Logging...
+                  </>
+                ) : (
+                  <>✅ Log Checkpoint</>
+                )}
+              </button>
+              <button 
+                onClick={resetForNext} 
+                className="btn btn-outline"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Result */}
         {step === 'result' && scanResult && (
@@ -213,8 +333,19 @@ export default function Checkpoint() {
                 <div className="sticker-preview sticker-red">🔥</div>
                 <h2 className="text-danger">Batch Invalidated!</h2>
                 <p className="text-secondary mt-1">
-                  Heat exposure detected. This batch is no longer safe for use.
+                  {scanResult.message || 'Heat exposure detected. This batch is no longer safe for use.'}
                 </p>
+                {scanResult.invalidationReason === 'temperature_exceeded' && (
+                  <div className="card mt-2" style={{ 
+                    background: 'rgba(239, 68, 68, 0.1)', 
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    textAlign: 'left'
+                  }}>
+                    <p className="text-danger" style={{ fontSize: '0.875rem', margin: 0 }}>
+                      ⚠️ Temperature {scanResult.temperature}°C exceeded safe limit of {scanResult.maxAllowedTemp}°C
+                    </p>
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -223,7 +354,7 @@ export default function Checkpoint() {
                 </div>
                 <h2 className="text-safe">Checkpoint Logged</h2>
                 <p className="text-secondary mt-1">
-                  {detectedColor?.message}
+                  {scanResult.message || detectedColor?.message || 'Checkpoint logged successfully'}
                 </p>
               </>
             )}
@@ -244,8 +375,29 @@ export default function Checkpoint() {
               </div>
               <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
                 <span className="text-muted">Sticker Color</span>
-                <span>{detectedColor?.emoji} {detectedColor?.label}</span>
+                <span>
+                  {detectedColor?.color === 'green' ? '🟢' : detectedColor?.color === 'yellow' ? '🟡' : detectedColor?.color === 'red' ? '🔴' : '⚪'} 
+                  {detectedColor?.label || scanResult.stickerColor}
+                </span>
               </div>
+              {scanResult.temperature !== undefined && (
+                <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
+                  <span className="text-muted">Temperature</span>
+                  <span style={{ 
+                    color: scanResult.temperature > (scannedBatch?.optimalTempMax + 5) ? 'var(--danger)' : 
+                           scanResult.temperature > scannedBatch?.optimalTempMax ? 'var(--warning)' : 'var(--safe)',
+                    fontWeight: 600
+                  }}>
+                    {scanResult.temperature}°C
+                  </span>
+                </div>
+              )}
+              {scanResult.maxAllowedTemp && (
+                <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
+                  <span className="text-muted">Max Allowed</span>
+                  <span className="text-warning">{scanResult.maxAllowedTemp}°C</span>
+                </div>
+              )}
               <div className="flex-between">
                 <span className="text-muted">Status</span>
                 <span className={`status-badge status-${scanResult.batchStatus === 'INVALIDATED' ? 'danger' : 'safe'}`}>
@@ -264,13 +416,30 @@ export default function Checkpoint() {
                       <div className={`timeline-dot ${cp.stickerColor === 'red' ? 'danger' : cp.stickerColor === 'yellow' ? 'warning' : 'safe'}`}></div>
                       <div className="timeline-content">
                         <div className="timeline-title">{cp.checkpoint}</div>
-                        <div className="flex-between">
+                        <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
                           <span className="timeline-time">
                             {new Date(cp.timestamp).toLocaleString()}
                           </span>
-                          <span>
+                          <span style={{ fontSize: '1.25rem' }}>
                             {cp.stickerColor === 'green' ? '🟢' : cp.stickerColor === 'yellow' ? '🟡' : '🔴'}
                           </span>
+                          {cp.temperature !== null && cp.temperature !== undefined && (
+                            <div style={{ 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              gap: '0.25rem',
+                              fontSize: '0.875rem',
+                              color: cp.temperature > (scannedBatch?.optimalTempMax + 5) ? 'var(--danger)' : 
+                                     cp.temperature > scannedBatch?.optimalTempMax ? 'var(--warning)' : 'var(--text-secondary)',
+                              fontWeight: cp.temperature > scannedBatch?.optimalTempMax ? 600 : 400
+                            }}>
+                              <span>🌡️</span>
+                              <span>{cp.temperature}°C</span>
+                              {cp.temperature > (scannedBatch?.optimalTempMax + 5) && (
+                                <span className="text-danger" style={{ fontSize: '0.7rem' }}>⚠️</span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>

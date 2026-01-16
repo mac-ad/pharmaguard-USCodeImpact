@@ -7,6 +7,7 @@ import Consumer from './pages/Consumer'
 import StickerPreview from './pages/StickerPreview'
 import BatchCreated from './pages/BatchCreated'
 import DatabaseViewer from './pages/DatabaseViewer'
+import BatchView from './pages/BatchView'
 
 function App() {
   const location = useLocation()
@@ -66,6 +67,7 @@ function App() {
         <Route path="/consumer" element={<Consumer />} />
         <Route path="/sticker-preview" element={<StickerPreview />} />
         <Route path="/database-viewer" element={<DatabaseViewer />} />
+        <Route path="/batch/:batchId" element={<BatchView />} />
         <Route path="/batch-created" element={<BatchCreated />} />
       </Routes>
     </>

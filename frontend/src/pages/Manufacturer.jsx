@@ -23,8 +23,8 @@ export default function Manufacturer() {
         optimalTempMin: Number(formData.optimalTempMin),
         optimalTempMax: Number(formData.optimalTempMax)
       })
-      // Navigate to the success page with the batch data
-      navigate('/batch-created', { state: { batch } })
+      // Navigate to the batch view page with the batch ID
+      navigate(`/batch/${batch.batchId}`)
     } catch (err) {
       setError(err.message)
     } finally {

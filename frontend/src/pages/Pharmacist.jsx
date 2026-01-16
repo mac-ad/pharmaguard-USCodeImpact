@@ -144,6 +144,11 @@ export default function Pharmacist() {
                   <p>{batch.optimalTempMin}°C – {batch.optimalTempMax}°C</p>
                 </div>
                 <div>
+                  <p className="text-muted" style={{ fontSize: '0.75rem' }}>MAX ALLOWED</p>
+                  <p className="text-warning" style={{ fontWeight: 600 }}>{batch.optimalTempMax + 5}°C</p>
+                  <p className="text-muted" style={{ fontSize: '0.65rem' }}>(max + 5°C)</p>
+                </div>
+                <div>
                   <p className="text-muted" style={{ fontSize: '0.75rem' }}>STATUS</p>
                   <span className={`status-badge status-${batch.status === 'INVALIDATED' ? 'danger' : 'safe'}`}>
                     {batch.status}
@@ -167,8 +172,27 @@ export default function Pharmacist() {
                             {cp.stickerColor === 'green' ? '🟢' : cp.stickerColor === 'yellow' ? '🟡' : '🔴'}
                           </span>
                         </div>
-                        <div className="timeline-time">
-                          {new Date(cp.timestamp).toLocaleString()}
+                        <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                          <div className="timeline-time">
+                            {new Date(cp.timestamp).toLocaleString()}
+                          </div>
+                          {cp.temperature !== null && cp.temperature !== undefined && (
+                            <div style={{ 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              gap: '0.25rem',
+                              fontSize: '0.75rem',
+                              color: cp.temperature > (batch.optimalTempMax + 5) ? 'var(--danger)' : 
+                                     cp.temperature > batch.optimalTempMax ? 'var(--warning)' : 'var(--text-secondary)',
+                              fontWeight: cp.temperature > batch.optimalTempMax ? 600 : 400
+                            }}>
+                              <span>🌡️</span>
+                              <span>{cp.temperature}°C</span>
+                              {cp.temperature > (batch.optimalTempMax + 5) && (
+                                <span className="text-danger" style={{ fontSize: '0.7rem' }}>⚠️ Exceeded</span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>

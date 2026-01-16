@@ -186,28 +186,83 @@ export default function Consumer() {
                   Your medicine passed through {result.journey.length} checkpoints
                 </p>
                 
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {result.optimalTempMin !== undefined && result.optimalTempMax !== undefined && (
+                  <div className="card mb-2" style={{ 
+                    background: 'rgba(99, 102, 241, 0.1)', 
+                    border: '1px solid rgba(99, 102, 241, 0.2)',
+                    padding: '0.75rem'
+                  }}>
+                    <div style={{ fontSize: '0.875rem' }}>
+                      <span className="text-muted">Safe Temperature Range: </span>
+                      <span style={{ fontWeight: 600 }}>{result.optimalTempMin}°C – {result.optimalTempMax}°C</span>
+                      <br />
+                      <span className="text-muted">Maximum Allowed: </span>
+                      <span className="text-warning" style={{ fontWeight: 600 }}>{result.optimalTempMax + 5}°C</span>
+                      <span className="text-muted" style={{ fontSize: '0.75rem' }}> (max + 5°C tolerance)</span>
+                    </div>
+                  </div>
+                )}
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                   {result.journey.map((cp, idx) => (
                     <div 
                       key={idx}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '0.25rem',
-                        padding: '0.5rem 0.75rem',
+                        justifyContent: 'space-between',
+                        padding: '0.75rem',
                         background: cp.stickerColor === 'red' 
                           ? 'rgba(239, 68, 68, 0.15)' 
                           : cp.stickerColor === 'yellow'
                             ? 'rgba(245, 158, 11, 0.15)'
                             : 'rgba(16, 185, 129, 0.15)',
+                        border: cp.stickerColor === 'red' 
+                          ? '1px solid rgba(239, 68, 68, 0.3)' 
+                          : cp.stickerColor === 'yellow'
+                            ? '1px solid rgba(245, 158, 11, 0.3)'
+                            : '1px solid rgba(16, 185, 129, 0.3)',
                         borderRadius: 'var(--radius-md)',
-                        fontSize: '0.75rem'
+                        fontSize: '0.875rem'
                       }}
                     >
-                      <span>
-                        {cp.stickerColor === 'red' ? '🔴' : cp.stickerColor === 'yellow' ? '🟡' : '🟢'}
-                      </span>
-                      <span>{cp.checkpoint}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ fontSize: '1.25rem' }}>
+                          {cp.stickerColor === 'red' ? '🔴' : cp.stickerColor === 'yellow' ? '🟡' : '🟢'}
+                        </span>
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{cp.checkpoint}</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                            {new Date(cp.timestamp).toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
+                      {cp.temperature !== null && cp.temperature !== undefined && (
+                        <div style={{ 
+                          display: 'flex', 
+                          flexDirection: 'column',
+                          alignItems: 'flex-end',
+                          gap: '0.25rem'
+                        }}>
+                          <div style={{ 
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.25rem',
+                            color: cp.temperature > (result.optimalTempMax + 5) ? 'var(--danger)' : 
+                                   cp.temperature > result.optimalTempMax ? 'var(--warning)' : 'var(--text-secondary)',
+                            fontWeight: cp.temperature > result.optimalTempMax ? 600 : 400,
+                            fontSize: '0.875rem'
+                          }}>
+                            <span>🌡️</span>
+                            <span>{cp.temperature}°C</span>
+                          </div>
+                          {cp.temperature > (result.optimalTempMax + 5) && (
+                            <span className="text-danger" style={{ fontSize: '0.7rem' }}>
+                              ⚠️ Exceeded limit
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
