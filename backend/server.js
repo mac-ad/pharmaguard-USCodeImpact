@@ -39,6 +39,9 @@ db.exec(`
     stickerColor TEXT NOT NULL,
     withinRange INTEGER NOT NULL,
     timestamp TEXT NOT NULL,
+    latitude REAL,
+    longitude REAL,
+    temperature REAL,
     FOREIGN KEY (batchId) REFERENCES batches(batchId)
   );
 
@@ -49,6 +52,15 @@ db.exec(`
     FOREIGN KEY (batchId) REFERENCES batches(batchId)
   );
 `);
+
+// Attempt to add columns if they don't exist (migration for existing DB)
+try {
+  db.exec('ALTER TABLE checkpoints ADD COLUMN latitude REAL');
+  db.exec('ALTER TABLE checkpoints ADD COLUMN longitude REAL');
+  db.exec('ALTER TABLE checkpoints ADD COLUMN temperature REAL');
+} catch (e) {
+  // Ignore error if columns already exist
+}
 
 console.log('✅ Database initialized');
 
@@ -126,7 +138,7 @@ app.get('/batch/:id', async (req, res) => {
     }
 
     const checkpoints = db.prepare(
-      'SELECT checkpoint, stickerColor, withinRange, timestamp FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
+      'SELECT checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
     ).all(id);
 
     // Generate QR code
@@ -166,7 +178,7 @@ app.get('/batches', async (req, res) => {
 // Log a checkpoint scan
 app.post('/scan', async (req, res) => {
   try {
-    const { batchId, checkpoint, stickerColor } = req.body;
+    const { batchId, checkpoint, stickerColor, latitude, longitude, temperature } = req.body;
 
     if (!batchId || !checkpoint || !stickerColor) {
       return res.status(400).json({ error: 'Missing required fields: batchId, checkpoint, stickerColor' });
@@ -191,10 +203,16 @@ app.post('/scan', async (req, res) => {
     // Log checkpoint
     const timestamp = new Date().toISOString();
     const insertStmt = db.prepare(`
-      INSERT INTO checkpoints (batchId, checkpoint, stickerColor, withinRange, timestamp)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO checkpoints (batchId, checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    insertStmt.run(batchId, checkpoint, colorLower, withinRange ? 1 : 0, timestamp);
+    
+    // Default values if missing
+    const latIdx = latitude || null;
+    const lngIdx = longitude || null;
+    const tempIdx = temperature !== undefined ? temperature : (colorLower === 'red' ? 45 : colorLower === 'yellow' ? 30 : 20);
+
+    insertStmt.run(batchId, checkpoint, colorLower, withinRange ? 1 : 0, timestamp, latIdx, lngIdx, tempIdx);
 
     // Auto-invalidate if red sticker detected
     let newStatus = batch.status;
@@ -206,7 +224,7 @@ app.post('/scan', async (req, res) => {
 
     // Get updated checkpoints
     const checkpoints = db.prepare(
-      'SELECT checkpoint, stickerColor, withinRange, timestamp FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
+      'SELECT checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
     ).all(batchId);
 
     res.json({
@@ -358,6 +376,80 @@ app.post('/analyze-color', (req, res) => {
     res.status(500).json({ error: 'Failed to analyze color' });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════
+// DATABASE VIEWER ENDPOINT
+// ═══════════════════════════════════════════════════════════════
+
+// Get all database data
+app.get('/database/all', (req, res) => {
+  try {
+    // Get all batches
+    const batches = db.prepare('SELECT * FROM batches ORDER BY createdAt DESC').all();
+    
+    // Get all checkpoints
+    const checkpoints = db.prepare(`
+      SELECT c.*, b.medicineName 
+      FROM checkpoints c 
+      LEFT JOIN batches b ON c.batchId = b.batchId 
+      ORDER BY c.timestamp DESC
+    `).all();
+    
+    // Get all tablets
+    const tablets = db.prepare(`
+      SELECT t.*, b.medicineName, b.status as batchStatus 
+      FROM tablets t 
+      LEFT JOIN batches b ON t.batchId = b.batchId 
+      ORDER BY t.createdAt DESC
+    `).all();
+    
+    // Calculate statistics
+    const stats = {
+      totalBatches: batches.length,
+      safeBatches: batches.filter(b => b.status === 'SAFE').length,
+      invalidatedBatches: batches.filter(b => b.status === 'INVALIDATED').length,
+      totalCheckpoints: checkpoints.length,
+      totalTablets: tablets.length,
+      safeCheckpoints: checkpoints.filter(c => c.withinRange === 1).length,
+      warningCheckpoints: checkpoints.filter(c => c.withinRange === 0).length
+    };
+    
+    res.json({
+      stats,
+      batches: batches.map(b => ({
+        ...b,
+        withinRange: b.withinRange === 1
+      })),
+      checkpoints: checkpoints.map(c => ({
+        ...c,
+        withinRange: c.withinRange === 1
+      })),
+      tablets
+    });
+  } catch (error) {
+    console.error('Error fetching database data:', error);
+    res.status(500).json({ error: 'Failed to fetch database data' });
+  }
+});
+
+// Clear all database data
+app.delete('/database/clear', (req, res) => {
+  try {
+    // Delete all data from tables (in correct order due to foreign keys)
+    db.prepare('DELETE FROM checkpoints').run();
+    db.prepare('DELETE FROM tablets').run();
+    db.prepare('DELETE FROM batches').run();
+    
+    res.json({ 
+      success: true, 
+      message: 'All database data cleared successfully' 
+    });
+  } catch (error) {
+    console.error('Error clearing database:', error);
+    res.status(500).json({ error: 'Failed to clear database' });
+  }
+});
+
 
 // ═══════════════════════════════════════════════════════════════
 // HEALTH & INFO
