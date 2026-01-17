@@ -1,4 +1,4 @@
-/deploy_to_aws_script/
+/deploy_to_aws_script/deploy_to_aws.sh
 /frontend/dist/
 /backend/node_modules/
 /backend/pharmaguard.db
