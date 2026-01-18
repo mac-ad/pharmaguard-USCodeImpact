@@ -95,7 +95,7 @@ export default function Pharmacist() {
           <div className="card">
             <h3 className="mb-2">Scan Batch QR Code</h3>
 
-            <div className="camera-container">
+            {/* <div className="camera-container">
               <video
                 ref={qrScanner.videoRef}
                 className="camera-video"
@@ -106,7 +106,7 @@ export default function Pharmacist() {
               <div className="camera-status">
                 {qrScanner.isScanning ? '📷 Scanning for batch QR...' : 'Initializing camera...'}
               </div>
-            </div>
+            </div> */}
 
             {error && (
               <div className="card mt-2" style={{

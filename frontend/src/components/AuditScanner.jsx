@@ -1,5 +1,5 @@
 
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import { performAudit } from '../utils/api'
 
 export default function AuditScanner({ onClose }) {
@@ -9,6 +9,23 @@ export default function AuditScanner({ onClose }) {
     const [analysis, setAnalysis] = useState(null)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState(null)
+
+    // Auto-start camera on mount
+    useEffect(() => {
+        startCamera()
+        return () => {
+            if (videoRef.current && videoRef.current.srcObject) {
+                videoRef.current.srcObject.getTracks().forEach(t => t.stop())
+            }
+        }
+    }, [])
+
+    // Attach stream to video element when stream becomes available
+    useEffect(() => {
+        if (videoRef.current && stream) {
+            videoRef.current.srcObject = stream
+        }
+    }, [stream])
 
     // Start Camera
     const startCamera = async () => {
