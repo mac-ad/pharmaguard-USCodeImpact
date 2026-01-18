@@ -73,3 +73,16 @@ export async function generateQRWithTemperature(batchId, temperature) {
   return response.json()
 }
 
+export async function performAudit(imageData) {
+  const response = await fetch(`${API_BASE}/audit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ imageData })
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Verification failed' }))
+    throw new Error(error.error || 'Verification failed')
+  }
+  return response.json()
+}
+

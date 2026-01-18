@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useQRScanner } from '../hooks/useQRScanner'
 import { getBatch, createTablets } from '../utils/api'
+import AuditScanner from '../components/AuditScanner'
 
 export default function Pharmacist() {
   const [step, setStep] = useState('scan') // 'scan', 'details', 'tablets'
@@ -9,6 +10,7 @@ export default function Pharmacist() {
   const [tabletCount, setTabletCount] = useState(5)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [showAudit, setShowAudit] = useState(false)
 
   // QR Scanner
   const handleQRResult = useCallback(async (data) => {
@@ -70,6 +72,17 @@ export default function Pharmacist() {
 
   return (
     <div className="page">
+      {/* DEBUG BUTTON FOR AUDIT */}
+      <div style={{ marginBottom: '1rem', textAlign: 'right' }}>
+        <button
+          onClick={() => setShowAudit(true)}
+          className="btn btn-outline btn-sm"
+          style={{ fontSize: '0.8rem', padding: '0.5rem 1rem' }}
+        >
+          🛠️ Debug: Open Audit Scanner
+        </button>
+      </div>
+
       <div className="container" style={{ maxWidth: '700px' }}>
         <header className="text-center mb-3">
           <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>💊</div>
@@ -122,6 +135,17 @@ export default function Pharmacist() {
                   ? 'This batch was exposed to unsafe temperatures and should NOT be dispensed to patients.'
                   : 'This batch has been properly stored throughout its journey and is safe for use.'}
               </p>
+            </div>
+
+            {/* AI Audit Button */}
+            <div className="mb-3">
+              <button
+                onClick={() => setShowAudit(true)}
+                className="btn btn-outline btn-block"
+                style={{ border: '2px dashed var(--primary)', background: 'rgba(37, 99, 235, 0.05)' }}
+              >
+                🔍 AI Audit: Verify TTI Sticker
+              </button>
             </div>
 
             {/* Batch Info */}
@@ -287,6 +311,12 @@ export default function Pharmacist() {
             </div>
           </div>
         )}
+
+        {/* Audit Modal */}
+        {showAudit && (
+          <AuditScanner onClose={() => setShowAudit(false)} />
+        )}
+
       </div>
     </div>
   )

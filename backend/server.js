@@ -481,6 +481,76 @@ app.post('/qr/generate', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// AUDIT ENDPOINTS (Python Integration)
+// ═══════════════════════════════════════════════════════════════
+
+import { exec } from 'child_process';
+import fs from 'fs';
+
+// Submit an image for AI Audit
+app.post('/audit', async (req, res) => {
+  try {
+    const { imageData } = req.body;
+
+    if (!imageData) {
+      return res.status(400).json({ error: 'Missing imageData' });
+    }
+
+    // Convert Base64 (data:image/jpeg;base64,...) to buffer
+    const base64Data = imageData.replace(/^data:image\/\w+;base64,/, "");
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    // Create a temporary file
+    const tempFilePath = path.join(__dirname, `temp_audit_${Date.now()}.jpg`);
+    fs.writeFileSync(tempFilePath, buffer);
+
+    // Path to CLI script
+    const scriptPath = path.resolve(__dirname, '../ai/audit_cli.py');
+
+    // Command to execute Python script
+    // Ensure "python3" is in path, or use absolute path to venv python if needed
+    const command = `python3 "${scriptPath}" "${tempFilePath}"`;
+    console.log(`🔍 Executing Audit: ${command}`);
+
+    // Execute Python script
+    exec(command, (error, stdout, stderr) => {
+      // Always cleanup temp file
+      try {
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
+      } catch (cleanupError) {
+        console.error('Warning: Failed to cleanup temp file', cleanupError);
+      }
+
+      if (error) {
+        console.error(`❌ Audit Execution Error: ${error.message}`);
+        return res.status(500).json({ error: 'Audit execution failed', details: error.message });
+      }
+
+      if (stderr) {
+        // Python sometimes writes warnings to stderr, not always fatal
+        console.warn(`Audit Stderr: ${stderr}`);
+      }
+
+      try {
+        // Parse JSON output from Python
+        console.log(`✅ Audit Output: ${stdout}`);
+        const result = JSON.parse(stdout);
+        res.json(result);
+      } catch (parseError) {
+        console.error('Failed to parse Python output:', parseError);
+        res.status(500).json({ error: 'Invalid response from AI auditor', rawOutput: stdout });
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in /audit endpoint:', error);
+    res.status(500).json({ error: 'Internal server error during audit' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
 // DATABASE VIEWER ENDPOINT
 // ═══════════════════════════════════════════════════════════════
 
