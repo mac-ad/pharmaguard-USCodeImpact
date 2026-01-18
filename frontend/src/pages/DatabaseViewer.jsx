@@ -2,8 +2,15 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '../utils/api'
 import { createTablets } from '../utils/api'
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
+
+const MapClickHandler = ({ onClick }) => {
+    useMapEvents({
+        click: onClick
+    })
+    return null
+}
 
 function DatabaseViewer() {
     const navigate = useNavigate()
@@ -22,6 +29,10 @@ function DatabaseViewer() {
     const [generatingTablets, setGeneratingTablets] = useState(null)
     const [generatedTablets, setGeneratedTablets] = useState(null)
     const [showMapModal, setShowMapModal] = useState(false)
+    const [highlightedBatchId, setHighlightedBatchId] = useState(null)
+    const [mapFilter, setMapFilter] = useState('all')
+
+
 
     useEffect(() => {
         fetchData()
@@ -37,8 +48,9 @@ function DatabaseViewer() {
                 if (!response.ok) return
                 const newData = await response.json()
 
-                // Create a simple hash to detect changes
-                const newHash = `${newData.checkpointCount}-${newData.batchCount}-${newData.lastUpdated}`
+                // Create a simple hash to detect changes (Count + Latest Timestamp)
+                const latestCpTime = newData.checkpoints.length > 0 ? newData.checkpoints[0].timestamp : 'none';
+                const newHash = `${newData.stats.totalCheckpoints}-${newData.stats.totalBatches}-${latestCpTime}`;
 
                 // Only update if data actually changed
                 if (newHash !== lastDataHash && lastDataHash !== null) {
@@ -924,12 +936,51 @@ function DatabaseViewer() {
 
                             <div style={{
                                 flex: 1,
-                                background: '#0a0a0a',
+                                background: '#f9fafb',
                                 borderRadius: '12px',
-                                border: '1px solid #333',
+                                border: '1px solid #e5e7eb',
                                 position: 'relative',
                                 overflow: 'hidden'
                             }}>
+                                {/* Filter Controls */}
+                                <div style={{
+                                    position: 'absolute',
+                                    top: '20px',
+                                    right: '25px',
+                                    zIndex: 10000,
+                                    display: 'flex',
+                                    gap: '8px',
+                                    padding: '8px',
+                                    background: 'rgba(255, 255, 255, 0.9)',
+                                    borderRadius: '8px',
+                                    boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+                                }}>
+                                    {[
+                                        { id: 'all', label: 'All', color: '#4b5563' },
+                                        { id: 'safe', label: 'Safe', color: '#10b981' },
+                                        { id: 'warning', label: 'Warning', color: '#f59e0b' },
+                                        { id: 'critical', label: 'Critical', color: '#ef4444' }
+                                    ].map(f => (
+                                        <button
+                                            key={f.id}
+                                            onClick={(e) => { e.stopPropagation(); setMapFilter(f.id); }}
+                                            style={{
+                                                padding: '6px 12px',
+                                                borderRadius: '6px',
+                                                border: 'none',
+                                                background: mapFilter === f.id ? f.color : '#f3f4f6',
+                                                color: mapFilter === f.id ? 'white' : '#374151',
+                                                fontWeight: '600',
+                                                fontSize: '0.85rem',
+                                                cursor: 'pointer',
+                                                boxShadow: mapFilter === f.id ? '0 2px 4px rgba(0,0,0,0.2)' : 'none',
+                                                transition: 'all 0.2s'
+                                            }}
+                                        >
+                                            {f.label}
+                                        </button>
+                                    ))}
+                                </div>
                                 <MapContainer
                                     center={[28.3, 84.1]}
                                     zoom={7}
@@ -939,6 +990,7 @@ function DatabaseViewer() {
                                         url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
                                         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
                                     />
+                                    <MapClickHandler onClick={() => setHighlightedBatchId(null)} />
 
                                     {/* Data Logic */}
                                     {(() => {
@@ -972,6 +1024,10 @@ function DatabaseViewer() {
 
                                             const lineColor = selectedBatch ? '#6366f1' : stringToColor(batchId);
 
+                                            // Highlight Logic
+                                            const isDimmed = highlightedBatchId && batchId !== highlightedBatchId;
+                                            const isHighlighted = highlightedBatchId === batchId;
+
                                             // Line
                                             if (points.length > 1) {
                                                 renderElements.push(
@@ -981,8 +1037,8 @@ function DatabaseViewer() {
                                                         pathOptions={{
                                                             color: lineColor,
                                                             dashArray: selectedBatch ? '10, 10' : '5, 5',
-                                                            weight: selectedBatch ? 3 : 2,
-                                                            opacity: 0.8
+                                                            weight: isHighlighted ? 5 : (selectedBatch ? 3 : 2),
+                                                            opacity: isDimmed ? 0.2 : 0.8
                                                         }}
                                                     />
                                                 );
@@ -990,7 +1046,22 @@ function DatabaseViewer() {
 
                                             // Markers
                                             points.forEach((cp, i) => {
-                                                const badgeColor = getColorBadge(cp.stickerColor);
+                                                // Determine effective status
+                                                // If sticker is red OR temp exceeds limit, treat as Alert
+                                                const maxTemp = cp.optimalTempMax || 25;
+                                                const isTempExceeded = cp.temperature > (maxTemp + 5);
+                                                const isCritical = cp.stickerColor === 'red' || isTempExceeded;
+
+                                                const effectiveStatus = isCritical ? 'red' : cp.stickerColor;
+
+                                                // Filter Check
+                                                if (mapFilter !== 'all') {
+                                                    if (mapFilter === 'safe' && effectiveStatus !== 'green') return;
+                                                    if (mapFilter === 'warning' && effectiveStatus !== 'yellow') return;
+                                                    if (mapFilter === 'critical' && effectiveStatus !== 'red') return;
+                                                }
+
+                                                const badgeColor = getColorBadge(effectiveStatus);
 
                                                 const customIcon = L.divIcon({
                                                     className: 'custom-icon',
@@ -1007,7 +1078,8 @@ function DatabaseViewer() {
                                                         font-weight: bold;
                                                         font-size: 12px;
                                                         color: #000;
-                                                    ">${i + 1}</div>`,
+                                                        opacity: ${isDimmed ? 0.6 : 1};
+                                                    ">${isCritical ? '!' : i + 1}</div>`,
                                                     iconSize: [28, 28],
                                                     iconAnchor: [14, 14]
                                                 });
@@ -1017,12 +1089,25 @@ function DatabaseViewer() {
                                                         key={`marker-${batchId}-${i}`}
                                                         position={[cp.latitude, cp.longitude]}
                                                         icon={customIcon}
+                                                        opacity={isDimmed ? 0.4 : 1.0}
+                                                        zIndexOffset={isHighlighted ? 1000 : 0}
+                                                        eventHandlers={{
+                                                            click: () => setHighlightedBatchId(batchId)
+                                                        }}
                                                     >
                                                         <Popup>
                                                             <div style={{ color: '#333' }}>
                                                                 <strong>#{i + 1} {cp.checkpoint}</strong><br />
                                                                 <span style={{ color: '#666', fontSize: '0.8rem' }}>Batch: <span style={{ color: lineColor, fontWeight: 'bold' }}>{batchId}</span></span><br />
-                                                                Status: {cp.stickerColor}<br />
+                                                                Status: <span style={{
+                                                                    color: isCritical ? '#dc2626' : effectiveStatus === 'yellow' ? '#d97706' : '#16a34a',
+                                                                    fontWeight: 'bold',
+                                                                    textTransform: 'uppercase'
+                                                                }}>
+                                                                    {isCritical ? '🚨 ALERT' : effectiveStatus === 'yellow' ? '⚠️ WARNING' : '✅ SAFE'}
+                                                                </span><br />
+                                                                {isTempExceeded && <span style={{ color: '#dc2626', fontSize: '0.8rem', fontWeight: 'bold' }}>(Temp Violation)<br /></span>}
+                                                                Temperature: <strong>{cp.temperature ? `${cp.temperature}°C` : 'N/A'}</strong><br />
                                                                 Time: {new Date(cp.timestamp).toLocaleTimeString()}
                                                             </div>
                                                         </Popup>

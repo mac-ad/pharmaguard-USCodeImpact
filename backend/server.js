@@ -7,6 +7,7 @@ import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getCheckpointsForBatch, getAllDistricts } from './checkpointService.js';
+import { NEPAL_DISTRICTS } from './nepal_districts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,6 +53,22 @@ db.exec(`
     createdAt TEXT NOT NULL,
     FOREIGN KEY (batchId) REFERENCES batches(batchId)
   );
+
+  CREATE TABLE IF NOT EXISTS districts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS batch_checkpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batchId TEXT NOT NULL,
+    districtId INTEGER NOT NULL,
+    checkpointOrder INTEGER NOT NULL,
+    FOREIGN KEY (batchId) REFERENCES batches(batchId) ON DELETE CASCADE,
+    FOREIGN KEY (districtId) REFERENCES districts(id)
+  );
 `);
 
 // Attempt to add columns if they don't exist (migration for existing DB)
@@ -61,6 +78,22 @@ try {
   db.exec('ALTER TABLE checkpoints ADD COLUMN temperature REAL');
 } catch (e) {
   // Ignore error if columns already exist
+}
+
+// Seed districts if empty
+try {
+  const count = db.prepare('SELECT count(*) as count FROM districts').get();
+  if (count.count === 0) {
+    console.log('🌱 Seeding districts...');
+    const insert = db.prepare('INSERT INTO districts (name, latitude, longitude) VALUES (?, ?, ?)');
+    const insertMany = db.transaction((districts) => {
+      for (const d of districts) insert.run(d.name, d.latitude, d.longitude);
+    });
+    insertMany(NEPAL_DISTRICTS);
+    console.log('✅ Populated 75 districts');
+  }
+} catch (error) {
+  console.error('Error seeding districts:', error);
 }
 
 console.log('✅ Database initialized');
