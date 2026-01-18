@@ -22,6 +22,13 @@ export function useQRScanner(onResult) {
   }, [])
 
 
+  const stopScanning = useCallback(() => {
+    if (readerRef.current) {
+      readerRef.current.reset()
+    }
+    setIsScanning(false)
+  }, [])
+
   const startScanning = useCallback(async () => {
     if (!readerRef.current || !videoRef.current) return
 
@@ -99,14 +106,6 @@ export function useQRScanner(onResult) {
       setIsScanning(false)
     }
   }, [onResult, isScanning, stopScanning])
-
-
-  const stopScanning = useCallback(() => {
-    if (readerRef.current) {
-      readerRef.current.reset()
-    }
-    setIsScanning(false)
-  }, [])
 
   const resetScanner = useCallback(() => {
     setLastResult(null)
