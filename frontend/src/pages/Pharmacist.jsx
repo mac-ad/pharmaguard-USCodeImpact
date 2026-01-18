@@ -71,6 +71,17 @@ export default function Pharmacist() {
 
   return (
     <div className="page">
+      {/* DEBUG BUTTON FOR AUDIT */}
+      <div style={{ marginBottom: '1rem', textAlign: 'right' }}>
+        <button
+          onClick={() => setShowAudit(true)}
+          className="btn btn-outline btn-sm"
+          style={{ fontSize: '0.8rem', padding: '0.5rem 1rem' }}
+        >
+          🛠️ Debug: Open Audit Scanner
+        </button>
+      </div>
+
       <div className="container" style={{ maxWidth: '700px' }}>
         <header className="text-center mb-3">
           <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>💊</div>
