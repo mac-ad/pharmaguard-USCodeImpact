@@ -36,3 +36,7 @@ __pycache__/
 *$py.class
 ai/venv/
 ai/.venv/
+
+backend/venv/
+backend/.venv/
+/backend/.env

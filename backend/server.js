@@ -541,8 +541,9 @@ app.post('/audit', async (req, res) => {
     const scriptPath = path.resolve(__dirname, '../ai/audit_cli.py');
 
     // Command to execute Python script
-    // Ensure "python3" is in path, or use absolute path to venv python if needed
-    const command = `python3 "${scriptPath}" "${tempFilePath}"`;
+    const venvPython = path.join(__dirname, 'venv/bin/python3');
+    const pythonExecutable = fs.existsSync(venvPython) ? venvPython : 'python3';
+    const command = `"${pythonExecutable}" "${scriptPath}" "${tempFilePath}"`;
     console.log(`🔍 Executing Audit: ${command}`);
 
     // Execute Python script

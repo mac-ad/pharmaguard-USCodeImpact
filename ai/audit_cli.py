@@ -1,6 +1,9 @@
 
 import sys
 import os
+import warnings
+# Suppress deprecation warnings from libraries
+warnings.filterwarnings("ignore")
 import json
 import argparse
 from audit import PharmaGuardAudit
@@ -33,7 +36,7 @@ def main():
             "reason": str(e)
         }
         print(json.dumps(error_response))
-        sys.exit(1)
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
