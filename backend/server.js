@@ -6,6 +6,7 @@ import QRCode from 'qrcode';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { getCheckpointsForBatch, getAllDistricts } from './checkpointService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -197,9 +198,9 @@ app.post('/scan', async (req, res) => {
     }
 
     // Validate checkpoint
-    if (!CHECKPOINT_ORDER.includes(checkpoint)) {
-      return res.status(400).json({ error: 'Invalid checkpoint' });
-    }
+    // if (!CHECKPOINT_ORDER.includes(checkpoint)) {
+    //   return res.status(400).json({ error: 'Invalid checkpoint' });
+    // }
 
     // Get batch
     const batch = db.prepare('SELECT * FROM batches WHERE batchId = ?').get(batchId);
@@ -288,6 +289,40 @@ app.post('/scan', async (req, res) => {
 // Get checkpoint order
 app.get('/checkpoints', (req, res) => {
   res.json(CHECKPOINT_ORDER);
+});
+
+// Get checkpoints for a specific batch (creates random assignment if doesn't exist)
+app.get('/batch/:batchId/checkpoints', (req, res) => {
+  try {
+    const { batchId } = req.params;
+    const count = parseInt(req.query.count) || 5; // Default to 5 checkpoints
+    
+    const checkpoints = getCheckpointsForBatch(batchId, count);
+    
+    res.json({
+      batchId,
+      checkpoints: checkpoints.map(cp => ({
+        order: cp.order,
+        name: cp.name,
+        latitude: cp.latitude,
+        longitude: cp.longitude
+      }))
+    });
+  } catch (error) {
+    console.error('Error getting batch checkpoints:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all available districts
+app.get('/districts', (req, res) => {
+  try {
+    const districts = getAllDistricts();
+    res.json({ districts });
+  } catch (error) {
+    console.error('Error getting districts:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -507,6 +542,8 @@ app.get('/database/all', (req, res) => {
 app.delete('/database/clear', (req, res) => {
   try {
     // Delete all data from tables (in correct order due to foreign keys)
+    // Delete batch_checkpoints first (fixes FK constraint)
+    try { db.prepare('DELETE FROM batch_checkpoints').run(); } catch (e) { console.log('batch_checkpoints table might not exist yet'); }
     db.prepare('DELETE FROM checkpoints').run();
     db.prepare('DELETE FROM tablets').run();
     db.prepare('DELETE FROM batches').run();
