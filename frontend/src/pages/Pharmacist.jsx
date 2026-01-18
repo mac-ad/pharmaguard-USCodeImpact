@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useQRScanner } from '../hooks/useQRScanner'
 import { getBatch, createTablets } from '../utils/api'
+import AuditScanner from '../components/AuditScanner'
 
 export default function Pharmacist() {
   const [step, setStep] = useState('scan') // 'scan', 'details', 'tablets'
@@ -9,6 +10,7 @@ export default function Pharmacist() {
   const [tabletCount, setTabletCount] = useState(5)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [showAudit, setShowAudit] = useState(false)
 
   // QR Scanner
   const handleQRResult = useCallback(async (data) => {
@@ -40,7 +42,7 @@ export default function Pharmacist() {
   // Generate tablets
   const generateTablets = async () => {
     if (!batch) return
-    
+
     setLoading(true)
     setError(null)
 
@@ -80,10 +82,10 @@ export default function Pharmacist() {
         {step === 'scan' && (
           <div className="card">
             <h3 className="mb-2">Scan Batch QR Code</h3>
-            
+
             <div className="camera-container">
-              <video 
-                ref={qrScanner.videoRef} 
+              <video
+                ref={qrScanner.videoRef}
                 className="camera-video"
                 playsInline
                 muted
@@ -95,8 +97,8 @@ export default function Pharmacist() {
             </div>
 
             {error && (
-              <div className="card mt-2" style={{ 
-                background: 'rgba(239, 68, 68, 0.1)', 
+              <div className="card mt-2" style={{
+                background: 'rgba(239, 68, 68, 0.1)',
                 border: '1px solid rgba(239, 68, 68, 0.3)'
               }}>
                 <p className="text-danger">{error}</p>
@@ -117,17 +119,28 @@ export default function Pharmacist() {
                 {batch.status === 'INVALIDATED' ? 'HEAT DAMAGED' : 'SAFE FOR DISPENSING'}
               </div>
               <p className="result-message">
-                {batch.status === 'INVALIDATED' 
+                {batch.status === 'INVALIDATED'
                   ? 'This batch was exposed to unsafe temperatures and should NOT be dispensed to patients.'
                   : 'This batch has been properly stored throughout its journey and is safe for use.'}
               </p>
             </div>
 
+            {/* AI Audit Button */}
+            <div className="mb-3">
+              <button
+                onClick={() => setShowAudit(true)}
+                className="btn btn-outline btn-block"
+                style={{ border: '2px dashed var(--primary)', background: 'rgba(37, 99, 235, 0.05)' }}
+              >
+                🔍 AI Audit: Verify TTI Sticker
+              </button>
+            </div>
+
             {/* Batch Info */}
             <div className="card mb-2">
               <h3 className="mb-2">Batch Information</h3>
-              <div style={{ 
-                display: 'grid', 
+              <div style={{
+                display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
                 gap: '1rem'
               }}>
@@ -177,13 +190,13 @@ export default function Pharmacist() {
                             {new Date(cp.timestamp).toLocaleString()}
                           </div>
                           {cp.temperature !== null && cp.temperature !== undefined && (
-                            <div style={{ 
-                              display: 'flex', 
-                              alignItems: 'center', 
+                            <div style={{
+                              display: 'flex',
+                              alignItems: 'center',
                               gap: '0.25rem',
                               fontSize: '0.75rem',
-                              color: cp.temperature > (batch.optimalTempMax + 5) ? 'var(--danger)' : 
-                                     cp.temperature > batch.optimalTempMax ? 'var(--warning)' : 'var(--text-secondary)',
+                              color: cp.temperature > (batch.optimalTempMax + 5) ? 'var(--danger)' :
+                                cp.temperature > batch.optimalTempMax ? 'var(--warning)' : 'var(--text-secondary)',
                               fontWeight: cp.temperature > batch.optimalTempMax ? 600 : 400
                             }}>
                               <span>🌡️</span>
@@ -208,7 +221,7 @@ export default function Pharmacist() {
                 <p className="text-secondary mb-2" style={{ fontSize: '0.875rem' }}>
                   Create individual QR codes for consumer verification
                 </p>
-                
+
                 <div className="input-group">
                   <label>Number of Tablets</label>
                   <input
@@ -221,7 +234,7 @@ export default function Pharmacist() {
                   />
                 </div>
 
-                <button 
+                <button
                   onClick={generateTablets}
                   disabled={loading}
                   className="btn btn-safe btn-block"
@@ -231,8 +244,8 @@ export default function Pharmacist() {
               </div>
             )}
 
-            <button 
-              onClick={startScan} 
+            <button
+              onClick={startScan}
               className="btn btn-outline btn-block mt-2"
             >
               ← Scan Another Batch
@@ -249,16 +262,16 @@ export default function Pharmacist() {
               <p className="text-secondary">Print or display these for consumers to scan</p>
             </div>
 
-            <div style={{ 
-              display: 'grid', 
+            <div style={{
+              display: 'grid',
               gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
               gap: '1rem'
             }}>
               {tablets.map((tablet) => (
                 <div key={tablet.tabletId} className="card text-center" style={{ padding: '1rem' }}>
                   <div className="qr-display" style={{ margin: '0 auto 0.75rem' }}>
-                    <img 
-                      src={tablet.qrCode} 
+                    <img
+                      src={tablet.qrCode}
                       alt={`Tablet ${tablet.tabletId}`}
                       style={{ width: 150, height: 150 }}
                     />
@@ -271,14 +284,14 @@ export default function Pharmacist() {
             </div>
 
             <div className="flex gap-2 mt-3" style={{ justifyContent: 'center' }}>
-              <button 
-                onClick={() => setStep('details')} 
+              <button
+                onClick={() => setStep('details')}
                 className="btn btn-outline"
               >
                 ← Back to Batch
               </button>
-              <button 
-                onClick={startScan} 
+              <button
+                onClick={startScan}
                 className="btn btn-primary"
               >
                 Scan Another Batch
@@ -286,6 +299,12 @@ export default function Pharmacist() {
             </div>
           </div>
         )}
+
+        {/* Audit Modal */}
+        {showAudit && (
+          <AuditScanner onClose={() => setShowAudit(false)} />
+        )}
+
       </div>
     </div>
   )
