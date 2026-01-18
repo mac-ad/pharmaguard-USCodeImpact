@@ -38,6 +38,12 @@ export async function getCheckpoints() {
   return response.json()
 }
 
+export async function getBatchCheckpoints(batchId, count = 5) {
+  const response = await fetch(`${API_BASE}/batch/${batchId}/checkpoints?count=${count}`)
+  if (!response.ok) throw new Error('Failed to fetch batch checkpoints')
+  return response.json()
+}
+
 export async function createTablets(batchId, count = 1) {
   const response = await fetch(`${API_BASE}/tablet`, {
     method: 'POST',

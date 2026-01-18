@@ -2,19 +2,15 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQRScanner } from '../hooks/useQRScanner'
 import { useCamera } from '../hooks/useCamera'
 import { analyzeVideoFrame, getColorInfo } from '../utils/colorDetection'
-import { logScan, getBatch } from '../utils/api'
-
-const CHECKPOINTS = [
-  'Manufacturer Dispatch',
-  'Birgunj Distributor',
-  'Lumbini Transit',
-  'Jumla Distributor'
-]
+import { logScan, getBatch, getBatchCheckpoints } from '../utils/api'
 
 export default function Checkpoint() {
   // State
+  const [step, setStep] = useState('scanBatch') // 'scanBatch', 'select', 'scanQR', 'processing', 'submitting', 'result'
+  const [currentBatch, setCurrentBatch] = useState(null)
+  const [checkpoints, setCheckpoints] = useState([])
+  const [loadingCheckpoints, setLoadingCheckpoints] = useState(false)
   const [currentCheckpoint, setCurrentCheckpoint] = useState(0)
-  const [step, setStep] = useState('select') // 'select', 'scanQR', 'processing', 'submitting', 'result'
   const [scannedBatch, setScannedBatch] = useState(null)
   const [detectedColor, setDetectedColor] = useState(null)
   const [temperature, setTemperature] = useState(25) // Default temperature
@@ -31,33 +27,36 @@ export default function Checkpoint() {
       return
     }
 
+    if (!checkpoints || checkpoints.length === 0) {
+      setError('No checkpoints available')
+      return
+    }
+
     setError(null)
     setIsAnalyzing(true)
 
-    // Determine sticker color from temperature
-    const stickerColor = getStickerColorFromTemp(temp)
-
     try {
-      // Get Geolocation
-      let latitude = null
-      let longitude = null
-      try {
-        const pos = await new Promise((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3000 })
-        })
-        latitude = pos.coords.latitude
-        longitude = pos.coords.longitude
-      } catch (e) {
-        console.warn('Geolocation failed or timed out', e)
-      }
+      // Determine sticker color from temperature
+      const stickerColor = getStickerColorFromTemp(temp)
 
       // Use the checkpoint index passed as parameter, or fallback to currentCheckpoint state
       const checkpointIdx = checkpointIndex !== undefined ? checkpointIndex : currentCheckpoint
+      const selectedCheckpoint = checkpoints[checkpointIdx];
 
-      // Log scan result
+      let latitude = null;
+      let longitude = null;
+
+      // ALWAYS use the district's static coordinates as per user request
+      // This simulates being at that specific Nepal district location
+      if (selectedCheckpoint) {
+        latitude = selectedCheckpoint.latitude
+        longitude = selectedCheckpoint.longitude
+      }
+
+      // Log scan result using the checkpoint name from the fetched checkpoints
       const result = await logScan({
         batchId: batch.batchId,
-        checkpoint: CHECKPOINTS[checkpointIdx],
+        checkpoint: selectedCheckpoint?.name || 'Unknown Checkpoint',
         stickerColor: stickerColor,
         latitude,
         longitude,
@@ -72,7 +71,60 @@ export default function Checkpoint() {
     } finally {
       setIsAnalyzing(false)
     }
-  }, [currentCheckpoint])
+  }, [currentCheckpoint, checkpoints])
+
+  // Fetch checkpoints for a batch
+  const fetchCheckpointsForBatch = useCallback(async (batchId) => {
+    try {
+      setLoadingCheckpoints(true)
+      setError(null)
+      const response = await getBatchCheckpoints(batchId, 5) // Get 5 random checkpoints
+      if (response && response.checkpoints) {
+        setCheckpoints(response.checkpoints)
+        return response.checkpoints
+      } else {
+        throw new Error('Invalid checkpoint data received')
+      }
+    } catch (err) {
+      setError('Failed to load checkpoints: ' + err.message)
+      return null
+    } finally {
+      setLoadingCheckpoints(false)
+    }
+  }, [])
+
+  // Handle batch QR scan (first step)
+  const handleBatchQRResult = useCallback(async (data) => {
+    if (data.type === 'BATCH' && data.batchId) {
+      // Stop scanning
+      if (scannerRef.current) {
+        scannerRef.current.stopScanning()
+      }
+
+      setStep('processing')
+      setError(null)
+
+      try {
+        // Fetch batch details
+        const batch = await getBatch(data.batchId)
+        setCurrentBatch(batch)
+
+        // Fetch checkpoints for this batch
+        const fetchedCheckpoints = await fetchCheckpointsForBatch(data.batchId)
+
+        if (fetchedCheckpoints && fetchedCheckpoints.length > 0) {
+          // Move to checkpoint selection
+          setStep('select')
+        } else {
+          setError('No checkpoints available for this batch')
+          setStep('scanBatch')
+        }
+      } catch (err) {
+        setError('Failed to load batch: ' + err.message)
+        setStep('scanBatch')
+      }
+    }
+  }, [fetchCheckpointsForBatch])
 
   // QR Scanner
   const handleQRResult = useCallback(async (data, rawText, videoElement) => {
@@ -142,12 +194,18 @@ export default function Checkpoint() {
     }
   }, [submitScan])
 
+  // Separate scanners for different steps
+  const batchQRScanner = useQRScanner(handleBatchQRResult)
   const qrScanner = useQRScanner(handleQRResult)
-  scannerRef.current = qrScanner
 
+  // Use the appropriate scanner based on step
   useEffect(() => {
-    scannerRef.current = qrScanner
-  }, [qrScanner])
+    if (step === 'scanBatch') {
+      scannerRef.current = batchQRScanner
+    } else if (step === 'scanQR') {
+      scannerRef.current = qrScanner
+    }
+  }, [step, batchQRScanner, qrScanner])
 
   // Sync ref with state to ensure it's always up-to-date
   useEffect(() => {
@@ -156,7 +214,23 @@ export default function Checkpoint() {
 
   const camera = useCamera()
 
-  // Start QR scanning
+  // Start batch QR scanning (first step)
+  const startBatchScan = () => {
+    setError(null)
+    setCurrentBatch(null)
+    setCheckpoints([])
+    setScannedBatch(null)
+    setDetectedColor(null)
+    setTemperature(25)
+    setScanResult(null)
+    setIsAnalyzing(false)
+    setStep('scanBatch')
+    setTimeout(() => {
+      batchQRScanner.startScanning()
+    }, 100)
+  }
+
+  // Start QR scanning (for checkpoint scanning)
   const startQRScan = () => {
     // Reset all state when starting a new scan
     setError(null)
@@ -180,13 +254,14 @@ export default function Checkpoint() {
     return 'red'
   }
 
-  // Reset and scan next
+  // Reset and go back to checkpoint selection
   const resetForNext = () => {
     setScannedBatch(null)
     setDetectedColor(null)
     setTemperature(25)
     setScanResult(null)
     setError(null)
+    // Go back to checkpoint selection (keep current batch and checkpoints)
     setStep('select')
     qrScanner.resetScanner()
   }
@@ -197,21 +272,31 @@ export default function Checkpoint() {
     return getColorInfo(color)
   }
 
+  // Start batch scan on mount
+  useEffect(() => {
+    startBatchScan()
+  }, [])
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      qrScanner.stopScanning()
+      if (qrScanner) qrScanner.stopScanning()
+      if (batchQRScanner) batchQRScanner.stopScanning()
       camera.stopCamera()
     }
   }, [])
 
-  // Checkpoint icons
-  const checkpointIcons = ['🏭', '📦', '🚛', '🏪']
+  // Checkpoint icons and colors (extended to support more checkpoints)
+  const checkpointIcons = ['🏭', '📦', '🚛', '🏪', '🏬', '🏢', '🏛️', '🏗️']
   const checkpointColors = [
     'linear-gradient(135deg, #6366f1, #818cf8)',
     'linear-gradient(135deg, #8b5cf6, #a78bfa)',
     'linear-gradient(135deg, #ec4899, #f472b6)',
-    'linear-gradient(135deg, #f59e0b, #fbbf24)'
+    'linear-gradient(135deg, #f59e0b, #fbbf24)',
+    'linear-gradient(135deg, #10b981, #34d399)',
+    'linear-gradient(135deg, #3b82f6, #60a5fa)',
+    'linear-gradient(135deg, #ef4444, #f87171)',
+    'linear-gradient(135deg, #14b8a6, #2dd4bf)'
   ]
 
   return (
@@ -240,6 +325,114 @@ export default function Checkpoint() {
           </p>
         </header>
 
+        {/* Step 1: Scan Batch QR Code */}
+        {step === 'scanBatch' && (
+          <div className="card" style={{
+            background: 'var(--bg-card)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '16px',
+            padding: '1.5rem',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              textAlign: 'center',
+              marginBottom: '1.5rem',
+              paddingBottom: '1rem',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+            }}>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+                Scan Batch QR Code
+              </h2>
+              <p className="text-muted" style={{ fontSize: '0.9rem' }}>
+                First, scan the batch QR code to load checkpoints
+              </p>
+            </div>
+
+            <div className="camera-container" style={{
+              borderRadius: '12px',
+              overflow: 'hidden',
+              marginBottom: '1rem',
+              position: 'relative',
+              width: '100%',
+              height: '400px',
+              minHeight: '400px',
+              background: '#000',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <video
+                ref={batchQRScanner.videoRef}
+                className="camera-video"
+                playsInline
+                muted
+                style={{
+                  borderRadius: '12px',
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover'
+                }}
+              />
+              <div className="camera-overlay"></div>
+              <div className="camera-status" style={{
+                background: 'rgba(0, 0, 0, 0.7)',
+                backdropFilter: 'blur(10px)',
+                borderRadius: '8px',
+                padding: '0.75rem 1rem'
+              }}>
+                {batchQRScanner.isScanning ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                    <span>📷</span>
+                    <span>Scanning for batch QR code...</span>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                    <span>⏳</span>
+                    <span>Initializing camera...</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{
+              background: 'rgba(99, 102, 241, 0.1)',
+              border: '1px solid rgba(99, 102, 241, 0.2)',
+              borderRadius: '8px',
+              padding: '1rem',
+              marginBottom: '1rem'
+            }}>
+              <p className="text-secondary" style={{
+                margin: 0,
+                fontSize: '0.875rem',
+                textAlign: 'center',
+                lineHeight: '1.5'
+              }}>
+                📱 Point your camera at the batch QR code. Checkpoints will be automatically assigned.
+              </p>
+            </div>
+
+            {error && (
+              <div className="card" style={{
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                borderRadius: '8px',
+                padding: '1rem'
+              }}>
+                <p className="text-danger" style={{ margin: 0, textAlign: 'center' }}>
+                  ⚠️ {error}
+                </p>
+                <button
+                  onClick={startBatchScan}
+                  className="btn btn-outline btn-block mt-2"
+                  style={{ fontSize: '0.875rem' }}
+                >
+                  Try Again
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Checkpoint Selection */}
         {step === 'select' && (
           <div className="card" style={{
@@ -258,69 +451,87 @@ export default function Checkpoint() {
                 Select Checkpoint Location
               </h2>
               <p className="text-muted" style={{ fontSize: '0.9rem' }}>
+                Batch: {currentBatch?.batchId} • {currentBatch?.medicineName}
+              </p>
+              <p className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>
                 Choose your current location to begin scanning
               </p>
             </div>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-              gap: '1rem'
-            }}>
-              {CHECKPOINTS.map((cp, index) => (
-                <button
-                  key={cp}
-                  onClick={() => {
-                    setCurrentCheckpoint(index)
-                    currentCheckpointRef.current = index
-                    startQRScan()
-                  }}
-                  className="btn"
-                  style={{
-                    background: checkpointColors[index],
-                    border: 'none',
-                    padding: '1.5rem',
-                    borderRadius: '12px',
-                    cursor: 'pointer',
-                    transition: 'all 0.3s ease',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: '0.75rem',
-                    color: '#fff',
-                    fontWeight: 600,
-                    fontSize: '1rem',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.target.style.transform = 'translateY(-4px)'
-                    e.target.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.25)'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.target.style.transform = 'translateY(0)'
-                    e.target.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)'
-                  }}
-                >
-                  <div style={{ fontSize: '2.5rem' }}>
-                    {checkpointIcons[index]}
-                  </div>
-                  <div style={{
-                    fontSize: '0.75rem',
-                    opacity: 0.9,
-                    textAlign: 'center',
-                    lineHeight: '1.4'
-                  }}>
-                    {cp}
-                  </div>
-                  <div style={{
-                    fontSize: '0.7rem',
-                    opacity: 0.8,
-                    marginTop: '0.25rem'
-                  }}>
-                    Step {index + 1}
-                  </div>
+
+            {loadingCheckpoints ? (
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <div className="loader" style={{ width: 48, height: 48, margin: '0 auto 1rem' }}></div>
+                <p>Loading checkpoints...</p>
+              </div>
+            ) : checkpoints.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <p className="text-danger">No checkpoints available</p>
+                <button onClick={startBatchScan} className="btn btn-outline mt-2">
+                  Scan Another Batch
                 </button>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                gap: '1rem'
+              }}>
+                {checkpoints.map((cp, index) => (
+                  <button
+                    key={cp.name}
+                    onClick={() => {
+                      setCurrentCheckpoint(index)
+                      currentCheckpointRef.current = index
+                      startQRScan()
+                    }}
+                    className="btn"
+                    style={{
+                      background: checkpointColors[index % checkpointColors.length],
+                      border: 'none',
+                      padding: '1.5rem',
+                      borderRadius: '12px',
+                      cursor: 'pointer',
+                      transition: 'all 0.3s ease',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                      color: '#fff',
+                      fontWeight: 600,
+                      fontSize: '1rem',
+                      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.target.style.transform = 'translateY(-4px)'
+                      e.target.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.25)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.transform = 'translateY(0)'
+                      e.target.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)'
+                    }}
+                  >
+                    <div style={{ fontSize: '2.5rem' }}>
+                      {checkpointIcons[index % checkpointIcons.length]}
+                    </div>
+                    <div style={{
+                      fontSize: '0.75rem',
+                      opacity: 0.9,
+                      textAlign: 'center',
+                      lineHeight: '1.4'
+                    }}>
+                      {cp.name}
+                    </div>
+                    <div style={{
+                      fontSize: '0.7rem',
+                      opacity: 0.8,
+                      marginTop: '0.25rem'
+                    }}>
+                      Step {index + 1}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -345,7 +556,7 @@ export default function Checkpoint() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                 <div style={{
                   fontSize: '1.5rem',
-                  background: checkpointColors[currentCheckpoint],
+                  background: checkpointColors[currentCheckpoint % checkpointColors.length],
                   width: '40px',
                   height: '40px',
                   borderRadius: '10px',
@@ -353,14 +564,14 @@ export default function Checkpoint() {
                   alignItems: 'center',
                   justifyContent: 'center'
                 }}>
-                  {checkpointIcons[currentCheckpoint]}
+                  {checkpointIcons[currentCheckpoint % checkpointIcons.length]}
                 </div>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600 }}>
-                    {CHECKPOINTS[currentCheckpoint]}
+                    {checkpoints[currentCheckpoint]?.name || 'Unknown Checkpoint'}
                   </h3>
                   <p className="text-muted" style={{ margin: 0, fontSize: '0.8rem' }}>
-                    Step {currentCheckpoint + 1} of {CHECKPOINTS.length}
+                    Step {currentCheckpoint + 1} of {checkpoints.length}
                   </p>
                 </div>
               </div>
@@ -581,7 +792,7 @@ export default function Checkpoint() {
                     Checkpoint
                   </div>
                   <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
-                    {CHECKPOINTS[currentCheckpoint]}
+                    {checkpoints[currentCheckpoint]?.name || 'Unknown Checkpoint'}
                   </div>
                 </div>
                 <div style={{

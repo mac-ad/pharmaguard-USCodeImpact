@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '../utils/api'
 import { createTablets } from '../utils/api'
+import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
+import L from 'leaflet'
 
 function DatabaseViewer() {
     const navigate = useNavigate()
@@ -19,6 +21,7 @@ function DatabaseViewer() {
     const [justUpdated, setJustUpdated] = useState(false)
     const [generatingTablets, setGeneratingTablets] = useState(null)
     const [generatedTablets, setGeneratedTablets] = useState(null)
+    const [showMapModal, setShowMapModal] = useState(false)
 
     useEffect(() => {
         fetchData()
@@ -33,10 +36,10 @@ function DatabaseViewer() {
                 const response = await fetch(`${API_BASE}/database/all`)
                 if (!response.ok) return
                 const newData = await response.json()
-                
+
                 // Create a simple hash to detect changes
                 const newHash = `${newData.checkpointCount}-${newData.batchCount}-${newData.lastUpdated}`
-                
+
                 // Only update if data actually changed
                 if (newHash !== lastDataHash && lastDataHash !== null) {
                     setData(newData)
@@ -174,11 +177,14 @@ function DatabaseViewer() {
     const filteredBatches = filterData(data.batches, ['batchId', 'medicineName', 'status'])
     const filteredCheckpoints = filterData(data.checkpoints, ['batchId', 'checkpoint', 'stickerColor', 'medicineName'])
     const filteredTablets = filterData(data.tablets, ['tabletId', 'batchId', 'medicineName'])
-    
+
+
     // Get checkpoints for selected batch
-    const batchCheckpoints = selectedBatch 
+    const batchCheckpoints = selectedBatch
         ? data.checkpoints.filter(cp => cp.batchId === selectedBatch.batchId)
         : []
+
+    console.log(batchCheckpoints)
 
     return (
         <div className="page">
@@ -432,8 +438,8 @@ function DatabaseViewer() {
                                                             disabled={generatingTablets === batch.batchId}
                                                             style={{
                                                                 padding: '0.5rem 1rem',
-                                                                background: generatingTablets === batch.batchId 
-                                                                    ? 'rgba(139, 92, 246, 0.3)' 
+                                                                background: generatingTablets === batch.batchId
+                                                                    ? 'rgba(139, 92, 246, 0.3)'
                                                                     : 'rgba(139, 92, 246, 0.2)',
                                                                 border: '1px solid #8b5cf6',
                                                                 borderRadius: '6px',
@@ -497,6 +503,29 @@ function DatabaseViewer() {
                                 </p>
                             </div>
                             <button
+                                onClick={() => setShowMapModal(true)}
+                                style={{
+                                    padding: '0.5rem 1rem',
+                                    background: 'rgba(236, 72, 153, 0.2)',
+                                    border: '1px solid #ec4899',
+                                    borderRadius: '6px',
+                                    color: '#f472b6',
+                                    cursor: 'pointer',
+                                    fontSize: '0.9rem',
+                                    fontWeight: 'bold',
+                                    transition: 'all 0.2s ease',
+                                    marginRight: '0.5rem'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.target.style.background = 'rgba(236, 72, 153, 0.3)'
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.target.style.background = 'rgba(236, 72, 153, 0.2)'
+                                }}
+                            >
+                                🗺️ Visualize Map
+                            </button>
+                            <button
                                 onClick={() => navigate(`/batch/${selectedBatch.batchId}`)}
                                 style={{
                                     padding: '0.5rem 1rem',
@@ -528,6 +557,7 @@ function DatabaseViewer() {
                                         <tr>
                                             <th>Checkpoint</th>
                                             <th>Sticker Color</th>
+                                            <th>Location</th>
                                             <th>Temperature</th>
                                             <th>Status</th>
                                             <th>Timestamp</th>
@@ -550,13 +580,23 @@ function DatabaseViewer() {
                                                     </div>
                                                 </td>
                                                 <td>
+                                                    {cp.latitude && cp.longitude ? (
+                                                        <div style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: 'rgba(255,255,255,0.7)' }}>
+                                                            <div>{Number(cp.latitude).toFixed(4)} N</div>
+                                                            <div>{Number(cp.longitude).toFixed(4)} E</div>
+                                                        </div>
+                                                    ) : (
+                                                        <span style={{ opacity: 0.3 }}>-</span>
+                                                    )}
+                                                </td>
+                                                <td>
                                                     {cp.temperature !== null && cp.temperature !== undefined ? (
-                                                        <div style={{ 
-                                                            display: 'flex', 
-                                                            alignItems: 'center', 
+                                                        <div style={{
+                                                            display: 'flex',
+                                                            alignItems: 'center',
                                                             gap: '0.5rem',
-                                                            color: cp.temperature > (selectedBatch.optimalTempMax + 5) ? '#ff0000' : 
-                                                                   cp.temperature > selectedBatch.optimalTempMax ? '#ffdd00' : '#00ff88',
+                                                            color: cp.temperature > (selectedBatch.optimalTempMax + 5) ? '#ff0000' :
+                                                                cp.temperature > selectedBatch.optimalTempMax ? '#ffdd00' : '#00ff88',
                                                             fontWeight: cp.temperature > selectedBatch.optimalTempMax ? 600 : 400
                                                         }}>
                                                             <span>🌡️</span>
@@ -594,7 +634,26 @@ function DatabaseViewer() {
                 {/* Checkpoints Table (Legacy - all checkpoints view) */}
                 {activeTab === 'checkpoints' && (
                     <div className="card">
-                        <h3 style={{ marginBottom: '1.5rem' }}>📍 All Checkpoints</h3>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                            <h3 style={{ margin: 0 }}>📍 All Checkpoints</h3>
+                            <button
+                                onClick={() => {
+                                    setSelectedBatch(null)
+                                    setShowMapModal(true)
+                                }}
+                                className="btn-primary"
+                                style={{
+                                    background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
+                                    fontSize: '0.9rem',
+                                    padding: '0.5rem 1rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem'
+                                }}
+                            >
+                                🗺️ Visualize All Data
+                            </button>
+                        </div>
                         {filteredCheckpoints.length === 0 ? (
                             <p style={{ textAlign: 'center', opacity: 0.5, padding: '2rem' }}>No checkpoints found</p>
                         ) : (
@@ -606,6 +665,7 @@ function DatabaseViewer() {
                                             <th>Medicine</th>
                                             <th>Checkpoint</th>
                                             <th>Sticker Color</th>
+                                            <th>Location</th>
                                             <th>Temperature</th>
                                             <th>Status</th>
                                             <th>Timestamp</th>
@@ -630,13 +690,23 @@ function DatabaseViewer() {
                                                     </div>
                                                 </td>
                                                 <td>
+                                                    {cp.latitude && cp.longitude ? (
+                                                        <div style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: 'rgba(255,255,255,0.7)' }}>
+                                                            <div>{Number(cp.latitude).toFixed(4)} N</div>
+                                                            <div>{Number(cp.longitude).toFixed(4)} E</div>
+                                                        </div>
+                                                    ) : (
+                                                        <span style={{ opacity: 0.3 }}>-</span>
+                                                    )}
+                                                </td>
+                                                <td>
                                                     {cp.temperature !== null && cp.temperature !== undefined ? (
-                                                        <div style={{ 
-                                                            display: 'flex', 
-                                                            alignItems: 'center', 
+                                                        <div style={{
+                                                            display: 'flex',
+                                                            alignItems: 'center',
                                                             gap: '0.5rem',
-                                                            color: cp.optimalTempMax && cp.temperature > (cp.optimalTempMax + 5) ? '#ff0000' : 
-                                                                   cp.optimalTempMax && cp.temperature > cp.optimalTempMax ? '#ffdd00' : '#00ff88',
+                                                            color: cp.optimalTempMax && cp.temperature > (cp.optimalTempMax + 5) ? '#ff0000' :
+                                                                cp.optimalTempMax && cp.temperature > cp.optimalTempMax ? '#ffdd00' : '#00ff88',
                                                             fontWeight: cp.optimalTempMax && cp.temperature > cp.optimalTempMax ? 600 : 400
                                                         }}>
                                                             <span>🌡️</span>
@@ -802,6 +872,173 @@ function DatabaseViewer() {
                     </div>
                 )}
 
+                {/* Map Modal */}
+                {showMapModal && (
+                    <div style={{
+                        position: 'fixed',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        background: 'rgba(0, 0, 0, 0.9)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 1000,
+                        padding: '2rem'
+                    }} onClick={() => setShowMapModal(false)}>
+                        <div className="card" style={{
+                            width: '100%',
+                            maxWidth: '95vw',
+                            height: '100%',
+                            maxHeight: '90vh',
+                            position: 'relative',
+                            display: 'flex',
+                            flexDirection: 'column'
+                        }} onClick={e => e.stopPropagation()}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                                <div>
+                                    <h2 style={{ margin: 0 }}>
+                                        🗺️ {selectedBatch ? `Batch: ${selectedBatch.batchId}` : 'All Checkpoints Map'}
+                                    </h2>
+                                    <p style={{ margin: '0 0 0.5rem 0', opacity: 0.7 }}>
+                                        {selectedBatch
+                                            ? 'Visualizing journey flow'
+                                            : 'Visualizing all checkpoint activity across Nepal'}
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setShowMapModal(false)}
+                                    style={{
+                                        padding: '0.5rem 1rem',
+                                        background: 'rgba(255, 255, 255, 0.1)',
+                                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                                        borderRadius: '6px',
+                                        color: '#fff',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    ✕ Close
+                                </button>
+                            </div>
+
+                            <div style={{
+                                flex: 1,
+                                background: '#0a0a0a',
+                                borderRadius: '12px',
+                                border: '1px solid #333',
+                                position: 'relative',
+                                overflow: 'hidden'
+                            }}>
+                                <MapContainer
+                                    center={[28.3, 84.1]}
+                                    zoom={7}
+                                    style={{ height: '100%', width: '100%', background: '#ffffff' }}
+                                >
+                                    <TileLayer
+                                        url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                                    />
+
+                                    {/* Data Logic */}
+                                    {(() => {
+                                        // Helper for colors
+                                        const stringToColor = (str) => {
+                                            let hash = 0;
+                                            for (let i = 0; i < str.length; i++) {
+                                                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+                                            }
+                                            const hue = Math.abs(hash % 360);
+                                            return `hsl(${hue}, 70%, 50%)`;
+                                        };
+
+                                        const pointsToShow = selectedBatch
+                                            ? batchCheckpoints
+                                            : data.checkpoints;
+
+                                        // Group by Batch ID
+                                        const batches = {};
+                                        pointsToShow.forEach(cp => {
+                                            if (!cp.latitude || !cp.longitude) return;
+                                            if (!batches[cp.batchId]) batches[cp.batchId] = [];
+                                            batches[cp.batchId].push(cp);
+                                        });
+
+                                        const renderElements = [];
+
+                                        Object.entries(batches).forEach(([batchId, points]) => {
+                                            // Sort by time
+                                            points.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+                                            const lineColor = selectedBatch ? '#6366f1' : stringToColor(batchId);
+
+                                            // Line
+                                            if (points.length > 1) {
+                                                renderElements.push(
+                                                    <Polyline
+                                                        key={`line-${batchId}`}
+                                                        positions={points.map(cp => [cp.latitude, cp.longitude])}
+                                                        pathOptions={{
+                                                            color: lineColor,
+                                                            dashArray: selectedBatch ? '10, 10' : '5, 5',
+                                                            weight: selectedBatch ? 3 : 2,
+                                                            opacity: 0.8
+                                                        }}
+                                                    />
+                                                );
+                                            }
+
+                                            // Markers
+                                            points.forEach((cp, i) => {
+                                                const badgeColor = getColorBadge(cp.stickerColor);
+
+                                                const customIcon = L.divIcon({
+                                                    className: 'custom-icon',
+                                                    html: `<div style="
+                                                        width: 24px; 
+                                                        height: 24px; 
+                                                        background: ${badgeColor}; 
+                                                        border-radius: 50%; 
+                                                        border: 2px solid ${lineColor};
+                                                        box-shadow: 0 0 10px ${badgeColor};
+                                                        display: flex;
+                                                        align-items: center;
+                                                        justify-content: center;
+                                                        font-weight: bold;
+                                                        font-size: 12px;
+                                                        color: #000;
+                                                    ">${i + 1}</div>`,
+                                                    iconSize: [28, 28],
+                                                    iconAnchor: [14, 14]
+                                                });
+
+                                                renderElements.push(
+                                                    <Marker
+                                                        key={`marker-${batchId}-${i}`}
+                                                        position={[cp.latitude, cp.longitude]}
+                                                        icon={customIcon}
+                                                    >
+                                                        <Popup>
+                                                            <div style={{ color: '#333' }}>
+                                                                <strong>#{i + 1} {cp.checkpoint}</strong><br />
+                                                                <span style={{ color: '#666', fontSize: '0.8rem' }}>Batch: <span style={{ color: lineColor, fontWeight: 'bold' }}>{batchId}</span></span><br />
+                                                                Status: {cp.stickerColor}<br />
+                                                                Time: {new Date(cp.timestamp).toLocaleTimeString()}
+                                                            </div>
+                                                        </Popup>
+                                                    </Marker>
+                                                );
+                                            });
+                                        });
+
+                                        return <>{renderElements}</>;
+                                    })()}
+                                </MapContainer>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Action Buttons */}
                 <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
                     <button className="btn-primary" onClick={fetchData}>
@@ -811,8 +1048,8 @@ function DatabaseViewer() {
                         className="btn-primary"
                         onClick={() => setIsAutoRefresh(!isAutoRefresh)}
                         style={{
-                            background: isAutoRefresh 
-                                ? 'linear-gradient(135deg, #00ff88 0%, #00cc66 100%)' 
+                            background: isAutoRefresh
+                                ? 'linear-gradient(135deg, #00ff88 0%, #00cc66 100%)'
                                 : 'rgba(255, 255, 255, 0.1)',
                             borderColor: isAutoRefresh ? '#00ff88' : 'rgba(255, 255, 255, 0.2)'
                         }}
@@ -841,7 +1078,7 @@ function DatabaseViewer() {
                         🗑️ Clear Database
                     </button>
                 </div>
-            </div>
+            </div >
 
             <style>{`
         .stat-card {
@@ -949,7 +1186,7 @@ function DatabaseViewer() {
           text-align: center;
         }
       `}</style>
-        </div>
+        </div >
     )
 }
 
