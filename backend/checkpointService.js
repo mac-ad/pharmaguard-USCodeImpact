@@ -52,6 +52,14 @@ export function getCheckpointsForBatch(batchId, count = 5) {
     const shuffled = allDistricts.sort(() => Math.random() - 0.5);
     const selectedDistricts = shuffled.slice(0, count);
 
+    // FORCE FIRST CHECKPOINT TO BE "Manufacturer Dispatch"
+    // We'll use the first random district's coordinates but rename it for the purpose of the trail
+    // meaningful location for dispatch
+    selectedDistricts[0] = {
+      ...selectedDistricts[0],
+      name: 'Manufacturer Dispatch (' + selectedDistricts[0].name + ')'
+    };
+
     // Insert the assignments
     const insertStmt = db.prepare(`
       INSERT INTO batch_checkpoints (batchId, districtId, checkpointOrder)

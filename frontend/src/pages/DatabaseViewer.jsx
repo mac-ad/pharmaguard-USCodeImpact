@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { API_BASE } from '../utils/api'
 import { createTablets } from '../utils/api'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents } from 'react-leaflet'
@@ -14,6 +14,7 @@ const MapClickHandler = ({ onClick }) => {
 
 function DatabaseViewer() {
     const navigate = useNavigate()
+    const location = useLocation()
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
@@ -37,6 +38,29 @@ function DatabaseViewer() {
     useEffect(() => {
         fetchData()
     }, [])
+
+    // Handle deep linking to batch map
+    useEffect(() => {
+        if (!data || !location.search) return
+
+        const params = new URLSearchParams(location.search)
+        const batchId = params.get('batch')
+        const searchParam = params.get('search')
+
+        if (batchId) {
+            const batch = data.batches.find(b => b.batchId === batchId)
+            if (batch) {
+                setSelectedBatch(batch)
+                setViewMode('checkpoints')
+                setShowMapModal(true)
+            }
+        }
+
+        if (searchParam) {
+            setSearchTerm(searchParam)
+            setActiveTab('batches') // Switch to batches view to see results
+        }
+    }, [data, location.search])
 
     // Real-time polling for updates
     useEffect(() => {
@@ -131,7 +155,8 @@ function DatabaseViewer() {
         const colors = {
             green: '#00ff88',
             yellow: '#ffdd00',
-            red: '#ff0000'
+            red: '#ff0000',
+            gray: '#94a3b8'
         }
         return colors[color] || '#888'
     }
@@ -186,9 +211,9 @@ function DatabaseViewer() {
         )
     }
 
-    const filteredBatches = filterData(data.batches, ['batchId', 'medicineName', 'status'])
-    const filteredCheckpoints = filterData(data.checkpoints, ['batchId', 'checkpoint', 'stickerColor', 'medicineName'])
-    const filteredTablets = filterData(data.tablets, ['tabletId', 'batchId', 'medicineName'])
+    const filteredBatches = filterData(data.batches, ['batchId', 'medicineName', 'status', 'manufacturer'])
+    const filteredCheckpoints = filterData(data.checkpoints, ['batchId', 'checkpoint', 'stickerColor', 'medicineName', 'manufacturer'])
+    const filteredTablets = filterData(data.tablets, ['tabletId', 'batchId', 'medicineName', 'manufacturer'])
 
 
     // Get checkpoints for selected batch
@@ -272,7 +297,7 @@ function DatabaseViewer() {
                 <div className="card" style={{ marginBottom: '1rem' }}>
                     <input
                         type="text"
-                        placeholder="🔍 Search by ID, medicine name, status, checkpoint, or color..."
+                        placeholder="🔍 Search by ID, medicine, manufacturer, status, or checkpoint..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         style={{
@@ -371,6 +396,7 @@ function DatabaseViewer() {
                                         <tr>
                                             <th>Batch ID</th>
                                             <th>Medicine</th>
+                                            <th>Manufacturer</th>
                                             <th>Temp Range</th>
                                             <th>Status</th>
                                             <th>Created</th>
@@ -382,6 +408,7 @@ function DatabaseViewer() {
                                             <tr key={batch.batchId}>
                                                 <td><code>{batch.batchId}</code></td>
                                                 <td><strong>{batch.medicineName}</strong></td>
+                                                <td>{batch.manufacturer || 'N/A'}</td>
                                                 <td>{batch.optimalTempMin}°C - {batch.optimalTempMax}°C</td>
                                                 <td>
                                                     <span style={{
@@ -675,6 +702,7 @@ function DatabaseViewer() {
                                         <tr>
                                             <th>Batch ID</th>
                                             <th>Medicine</th>
+                                            <th>Manufacturer</th>
                                             <th>Checkpoint</th>
                                             <th>Sticker Color</th>
                                             <th>Location</th>
@@ -688,6 +716,7 @@ function DatabaseViewer() {
                                             <tr key={idx}>
                                                 <td><code>{cp.batchId}</code></td>
                                                 <td><strong>{cp.medicineName}</strong></td>
+                                                <td>{cp.manufacturer || 'N/A'}</td>
                                                 <td>{cp.checkpoint}</td>
                                                 <td>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1006,7 +1035,7 @@ function DatabaseViewer() {
 
                                         const pointsToShow = selectedBatch
                                             ? batchCheckpoints
-                                            : data.checkpoints;
+                                            : filteredCheckpoints;
 
                                         // Group by Batch ID
                                         const batches = {};
@@ -1049,10 +1078,13 @@ function DatabaseViewer() {
                                                 // Determine effective status
                                                 // If sticker is red OR temp exceeds limit, treat as Alert
                                                 const maxTemp = cp.optimalTempMax || 25;
-                                                const isTempExceeded = cp.temperature > (maxTemp + 5);
+                                                const hasTemp = cp.temperature !== null && cp.temperature !== undefined;
+                                                const isTempExceeded = hasTemp && cp.temperature > maxTemp;
                                                 const isCritical = cp.stickerColor === 'red' || isTempExceeded;
 
-                                                const effectiveStatus = isCritical ? 'red' : cp.stickerColor;
+                                                let effectiveStatus = cp.stickerColor;
+                                                if (isCritical) effectiveStatus = 'red';
+                                                if (!hasTemp && cp.checkpoint === 'Batch Initialization') effectiveStatus = 'gray'; // Neutral for initialization
 
                                                 // Filter Check
                                                 if (mapFilter !== 'all') {

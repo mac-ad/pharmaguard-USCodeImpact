@@ -14,6 +14,9 @@ export default function BatchView() {
 
     // Temperature ranges and corresponding colors (moved outside conditional)
     const tempRanges = [
+        { temp: 0, color: '#00aaff', label: 'SAFE - Freezing', gradient: 'linear-gradient(135deg, #00aaff 0%, #0088cc 100%)' },
+        { temp: 5, color: '#00ccff', label: 'SAFE - Refrigerator', gradient: 'linear-gradient(135deg, #00ccff 0%, #00aaff 100%)' },
+        { temp: 10, color: '#00ffcc', label: 'SAFE - Cool', gradient: 'linear-gradient(135deg, #00ffcc 0%, #00ff88 100%)' },
         { temp: 15, color: '#00ff88', label: 'SAFE - Cold Storage', gradient: 'linear-gradient(135deg, #00ff88 0%, #00cc66 100%)' },
         { temp: 20, color: '#00ff88', label: 'SAFE - Optimal', gradient: 'linear-gradient(135deg, #00ff88 0%, #00dd77 100%)' },
         { temp: 25, color: '#00ff88', label: 'SAFE - Room Temp', gradient: 'linear-gradient(135deg, #00ff88 0%, #88ff00 100%)' },
@@ -24,7 +27,7 @@ export default function BatchView() {
     ]
 
     const getCurrentRange = () => {
-        return tempRanges.find(r => r.temp >= selectedTemp) || tempRanges[tempRanges.length - 1]
+        return tempRanges.slice().reverse().find(r => selectedTemp >= r.temp) || tempRanges[0]
     }
 
     // Generate QR code with temperature in real-time
@@ -46,6 +49,8 @@ export default function BatchView() {
     }, [batch?.batchId])
 
     useEffect(() => {
+        let isMounted = true;
+
         const fetchBatch = async () => {
             if (!batchId) {
                 setError('No batch ID provided')
@@ -56,33 +61,37 @@ export default function BatchView() {
             try {
                 setLoading(true)
                 const batchData = await getBatch(batchId)
-                setBatch(batchData)
-                // Generate initial QR code with default temperature immediately
-                if (batchData.batchId) {
-                    try {
-                        const qrData = await generateQRWithTemperature(batchData.batchId, selectedTemp)
-                        if (qrData.qrCode) {
-                            setDynamicQRCode(qrData.qrCode)
-                        } else if (batchData.qrCode) {
-                            // Fallback to batch QR code if generation fails
-                            setDynamicQRCode(batchData.qrCode)
-                        }
-                    } catch (qrErr) {
-                        console.warn('Initial QR generation failed, using batch QR:', qrErr)
-                        // Fallback to batch QR code
-                        if (batchData.qrCode) {
-                            setDynamicQRCode(batchData.qrCode)
+
+                if (isMounted) {
+                    setBatch(batchData)
+
+                    // Generate initial QR code with default temperature immediately
+                    if (batchData.batchId) {
+                        try {
+                            const qrData = await generateQRWithTemperature(batchData.batchId, selectedTemp)
+                            if (qrData.qrCode) {
+                                setDynamicQRCode(qrData.qrCode)
+                            } else if (batchData.qrCode) {
+                                setDynamicQRCode(batchData.qrCode)
+                            }
+                        } catch (qrErr) {
+                            console.warn('Initial QR generation failed, using batch QR:', qrErr)
+                            if (batchData.qrCode) setDynamicQRCode(batchData.qrCode)
                         }
                     }
                 }
             } catch (err) {
-                setError(err.message || 'Failed to load batch')
+                if (isMounted) setError(err.message || 'Failed to load batch')
             } finally {
-                setLoading(false)
+                if (isMounted) setLoading(false)
             }
         }
 
         fetchBatch()
+
+        return () => {
+            isMounted = false;
+        }
     }, [batchId])
 
     // Generate QR when batch loads or temperature changes (with debounce)
@@ -240,25 +249,78 @@ export default function BatchView() {
                             </div>
                             <input
                                 type="range"
-                                min="10"
-                                max="50"
+                                min="0"
+                                max="60"
                                 value={selectedTemp}
                                 onChange={(e) => setSelectedTemp(Number(e.target.value))}
                                 style={{
                                     width: '100%',
                                     height: '8px',
                                     borderRadius: '4px',
-                                    background: 'linear-gradient(to right, #00ff88 0%, #88ff00 40%, #ffdd00 60%, #ff6600 80%, #ff0000 100%)',
+                                    background: 'linear-gradient(to right, #00aaff 0%, #00ff88 33%, #ffdd00 66%, #ff0000 100%)',
                                     outline: 'none',
                                     cursor: 'pointer'
                                 }}
                             />
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', opacity: 0.5, marginTop: '0.5rem' }}>
-                                <span>10°C</span>
-                                <span>50°C</span>
+                                <span>0°C</span>
+                                <span>60°C</span>
                             </div>
                         </div>
 
+                    </div>
+                    {/* Right Column: Blockchain Ledger */}
+                    <div className="card">
+                        <h2 className="card-title">⛓️ Blockchain Ledger</h2>
+
+                        <div style={{ marginBottom: '1.5rem', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                <div>
+                                    <p className="text-muted" style={{ fontSize: '0.75rem' }}>Manufacturer</p>
+                                    <p style={{ fontSize: '0.9rem', fontWeight: 600 }}>{batch.manufacturer || 'N/A'}</p>
+                                </div>
+                                <div>
+                                    <p className="text-muted" style={{ fontSize: '0.75rem' }}>Expiry Date</p>
+                                    <p style={{ fontSize: '0.9rem', fontWeight: 600 }}>{batch.expiryDate || 'N/A'}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="ledger-list">
+                            {batch.checkpoints && batch.checkpoints.length > 0 ? (
+                                batch.checkpoints.map((cp, idx) => (
+                                    <div key={idx} className="ledger-item">
+                                        <div className="ledger-header">
+                                            <span style={{ fontWeight: 600 }}>{cp.checkpoint}</span>
+                                            <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                                                {new Date(cp.timestamp).toLocaleTimeString()}
+                                            </span>
+                                        </div>
+
+                                        <div className="hash-row">
+                                            <span className="hash-label">Prev Hash:</span>
+                                            <span className="hash-value">{cp.previousHash ? cp.previousHash.substring(0, 16) + '...' : '00000000...'}</span>
+                                        </div>
+                                        <div className="hash-row">
+                                            <span className="hash-label">Curr Hash:</span>
+                                            <span className="hash-value" style={{ color: '#818cf8' }}>
+                                                {cp.currentHash ? cp.currentHash.substring(0, 16) + '...' : 'Pending...'}
+                                            </span>
+                                        </div>
+                                        {cp.signature && (
+                                            <div className="hash-row">
+                                                <span className="hash-label">Signature:</span>
+                                                <span className="hash-value" style={{ color: '#34d399' }}>Verified ✓</span>
+                                            </div>
+                                        )}
+
+                                        <div className="hash-chain-connector"></div>
+                                    </div>
+                                ))
+                            ) : (
+                                <p className="text-secondary text-center">No blocks mined yet.</p>
+                            )}
+                        </div>
                     </div>
                 </div>
 
@@ -329,6 +391,39 @@ export default function BatchView() {
                         .scan-text {
                             font-size: 3rem;
                         }
+                    }
+
+                    .ledger-item {
+                        position: relative;
+                        background: rgba(255,255,255,0.03);
+                        border: 1px solid rgba(255,255,255,0.05);
+                        border-radius: 8px;
+                        padding: 1rem;
+                        margin-bottom: 1rem;
+                    }
+                    .ledger-item:last-child {
+                        margin-bottom: 0;
+                    }
+                    .ledger-header {
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        margin-bottom: 0.75rem;
+                        border-bottom: 1px solid rgba(255,255,255,0.05);
+                        padding-bottom: 0.5rem;
+                    }
+                    .hash-row {
+                        display: flex;
+                        justify-content: space-between;
+                        font-family: 'JetBrains Mono', monospace;
+                        font-size: 0.7rem;
+                        margin-bottom: 0.25rem;
+                    }
+                    .hash-label {
+                        color: #64748b;
+                    }
+                    .hash-value {
+                        color: #94a3b8;
                     }
                 `}</style>
             </div>

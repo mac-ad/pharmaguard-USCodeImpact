@@ -7,6 +7,7 @@ import Consumer from './pages/Consumer'
 import BatchCreated from './pages/BatchCreated'
 import DatabaseViewer from './pages/DatabaseViewer'
 import BatchView from './pages/BatchView'
+import AuthorityDashboard from './pages/AuthorityDashboard'
 
 function App() {
   const location = useLocation()
@@ -30,6 +31,12 @@ function App() {
             className={`nav-link ${location.pathname === '/checkpoint' ? 'active' : ''}`}
           >
             Checkpoint
+          </Link>
+          <Link
+            to="/authority"
+            className={`nav-link ${location.pathname === '/authority' ? 'active' : ''}`}
+          >
+            Authority
           </Link>
           <Link
             to="/pharmacist"
@@ -56,6 +63,7 @@ function App() {
         <Route path="/" element={<Home />} />
         <Route path="/manufacturer" element={<Manufacturer />} />
         <Route path="/checkpoint" element={<Checkpoint />} />
+        <Route path="/authority" element={<AuthorityDashboard />} />
         <Route path="/pharmacist" element={<Pharmacist />} />
         <Route path="/consumer" element={<Consumer />} />
         <Route path="/database-viewer" element={<DatabaseViewer />} />

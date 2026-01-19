@@ -6,6 +6,7 @@ import QRCode from 'qrcode';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto'; // BlockChain Crypto
 import { getCheckpointsForBatch, getAllDistricts } from './checkpointService.js';
 import { NEPAL_DISTRICTS } from './nepal_districts.js';
 
@@ -28,6 +29,8 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS batches (
     batchId TEXT PRIMARY KEY,
     medicineName TEXT NOT NULL,
+    manufacturer TEXT,
+    expiryDate TEXT,
     optimalTempMin REAL NOT NULL,
     optimalTempMax REAL NOT NULL,
     status TEXT DEFAULT 'SAFE',
@@ -44,6 +47,9 @@ db.exec(`
     latitude REAL,
     longitude REAL,
     temperature REAL,
+    previousHash TEXT,
+    currentHash TEXT,
+    signature TEXT,
     FOREIGN KEY (batchId) REFERENCES batches(batchId)
   );
 
@@ -72,13 +78,23 @@ db.exec(`
 `);
 
 // Attempt to add columns if they don't exist (migration for existing DB)
-try {
-  db.exec('ALTER TABLE checkpoints ADD COLUMN latitude REAL');
-  db.exec('ALTER TABLE checkpoints ADD COLUMN longitude REAL');
-  db.exec('ALTER TABLE checkpoints ADD COLUMN temperature REAL');
-} catch (e) {
-  // Ignore error if columns already exist
-}
+const safeRun = (sql) => {
+  try {
+    db.exec(sql);
+  } catch (e) {
+    // Ignore error if column/index already exists
+  }
+};
+
+safeRun('ALTER TABLE checkpoints ADD COLUMN latitude REAL');
+safeRun('ALTER TABLE checkpoints ADD COLUMN longitude REAL');
+safeRun('ALTER TABLE checkpoints ADD COLUMN temperature REAL');
+safeRun('ALTER TABLE checkpoints ADD COLUMN previousHash TEXT');
+safeRun('ALTER TABLE checkpoints ADD COLUMN currentHash TEXT');
+safeRun('ALTER TABLE checkpoints ADD COLUMN signature TEXT');
+
+safeRun('ALTER TABLE batches ADD COLUMN manufacturer TEXT');
+safeRun('ALTER TABLE batches ADD COLUMN expiryDate TEXT');
 
 // Seed districts if empty
 try {
@@ -119,6 +135,21 @@ async function generateQRCode(data) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// BLOCKCHAIN HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+const generateHash = (data) => {
+  return crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
+};
+
+const signBlock = (hash) => {
+  // In a real app, this would use a private key. 
+  // Here we simulate a signature with a system secret
+  const secret = 'PHARMA_HACK_SECRET_KEY_2026';
+  return crypto.createHmac('sha256', secret).update(hash).digest('hex');
+};
+
+// ═══════════════════════════════════════════════════════════════
 // BATCH ENDPOINTS
 // ═══════════════════════════════════════════════════════════════
 
@@ -138,7 +169,7 @@ app.get("/test", (req, res) => {
 // Create a new batch
 app.post('/batch', async (req, res) => {
   try {
-    const { medicineName, optimalTempMin, optimalTempMax } = req.body;
+    const { medicineName, optimalTempMin, optimalTempMax, manufacturer, expiryDate } = req.body;
 
     if (!medicineName || optimalTempMin === undefined || optimalTempMax === undefined) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -148,10 +179,29 @@ app.post('/batch', async (req, res) => {
     const createdAt = new Date().toISOString();
 
     const stmt = db.prepare(`
-      INSERT INTO batches (batchId, medicineName, optimalTempMin, optimalTempMax, status, createdAt)
-      VALUES (?, ?, ?, ?, 'SAFE', ?)
+      INSERT INTO batches (batchId, medicineName, manufacturer, expiryDate, optimalTempMin, optimalTempMax, status, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, 'SAFE', ?)
     `);
-    stmt.run(batchId, medicineName, optimalTempMin, optimalTempMax, createdAt);
+    stmt.run(batchId, medicineName, manufacturer || 'PharmaGlobal Inc.', expiryDate || '2027-01-01', optimalTempMin, optimalTempMax, createdAt);
+
+    // 🔗 BLOCKCHAIN: Create Genesis Block (Manufacturing Checkpoint)
+    const genesisData = {
+      batchId,
+      checkpoint: 'Batch Initialization',
+      timestamp: createdAt,
+      type: 'GENESIS'
+    };
+    
+    // Genesis block has no previous hash (or "0")
+    const currentHash = generateHash(genesisData);
+    const signature = signBlock(currentHash);
+
+    const scanStmt = db.prepare(`
+        INSERT INTO checkpoints (batchId, checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature, previousHash, currentHash, signature)
+        VALUES (?, ?, 'green', 1, ?, NULL, NULL, NULL, '0', ?, ?)
+    `);
+    
+    scanStmt.run(batchId, 'Batch Initialization', createdAt, currentHash, signature);
 
     // Generate QR code
     const qrData = { type: 'BATCH', batchId };
@@ -165,7 +215,11 @@ app.post('/batch', async (req, res) => {
       status: 'SAFE',
       createdAt,
       qrCode,
-      checkpoints: []
+      checkpoints: [{
+        checkpoint: 'Manufacturer Dispatch',
+        timestamp: createdAt,
+        hash: currentHash
+      }]
     });
   } catch (error) {
     console.error('Error creating batch:', error);
@@ -184,7 +238,7 @@ app.get('/batch/:id', async (req, res) => {
     }
 
     const checkpoints = db.prepare(
-      'SELECT checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
+      'SELECT checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature, currentHash, previousHash FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
     ).all(id);
 
     // Generate QR code
@@ -230,11 +284,6 @@ app.post('/scan', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: batchId, checkpoint, stickerColor' });
     }
 
-    // Validate checkpoint
-    // if (!CHECKPOINT_ORDER.includes(checkpoint)) {
-    //   return res.status(400).json({ error: 'Invalid checkpoint' });
-    // }
-
     // Get batch
     const batch = db.prepare('SELECT * FROM batches WHERE batchId = ?').get(batchId);
     if (!batch) {
@@ -242,33 +291,51 @@ app.post('/scan', async (req, res) => {
     }
 
     // Determine if within range based on sticker color
-    // Green = safe, Yellow = warning but still ok, Red = overheated
     const colorLower = stickerColor.toLowerCase();
 
-    // Default temperature if not provided (estimate from color)
+    // Default temperature
     const detectedTemp = temperature !== undefined && temperature !== null
       ? Number(temperature)
       : (colorLower === 'red' ? 45 : colorLower === 'yellow' ? 30 : 20);
 
-    // Check temperature-based invalidation: if temp > (optimalTempMax + 5), invalidate
-    const maxAllowedTemp = batch.optimalTempMax + 5;
+    // Check temperature-based invalidation
+    const maxAllowedTemp = batch.optimalTempMax;
     const exceedsTempLimit = detectedTemp > maxAllowedTemp;
-
-    // Determine if within range: either color is red OR temperature exceeds limit
     const withinRange = colorLower !== 'red' && !exceedsTempLimit;
 
-    // Log checkpoint
+    // 🔗 BLOCKCHAIN: Fetch Last Block to link hash
+    const lastCheckpoint = db.prepare(`
+        SELECT currentHash FROM checkpoints 
+        WHERE batchId = ? 
+        ORDER BY timestamp DESC 
+        LIMIT 1
+    `).get(batchId);
+
+    const previousHash = lastCheckpoint ? lastCheckpoint.currentHash : '0';
     const timestamp = new Date().toISOString();
+
+    // Create Hash for Current data
+    const blockData = {
+        batchId,
+        checkpoint,
+        stickerColor: colorLower,
+        temperature: detectedTemp,
+        timestamp,
+        previousHash
+    };
+    const currentHash = generateHash(blockData);
+    const signature = signBlock(currentHash);
+
+    // Log checkpoint
     const insertStmt = db.prepare(`
-      INSERT INTO checkpoints (batchId, checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO checkpoints (batchId, checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature, previousHash, currentHash, signature)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    // Default values if missing
     const latIdx = latitude || null;
     const lngIdx = longitude || null;
 
-    insertStmt.run(batchId, checkpoint, colorLower, withinRange ? 1 : 0, timestamp, latIdx, lngIdx, detectedTemp);
+    insertStmt.run(batchId, checkpoint, colorLower, withinRange ? 1 : 0, timestamp, latIdx, lngIdx, detectedTemp, previousHash, currentHash, signature);
 
     // Auto-invalidate if red sticker detected OR temperature exceeds limit
     let newStatus = batch.status;
@@ -288,31 +355,24 @@ app.post('/scan', async (req, res) => {
       }
     }
 
-    // Get updated checkpoints
-    const checkpoints = db.prepare(
-      'SELECT checkpoint, stickerColor, withinRange, timestamp, latitude, longitude, temperature FROM checkpoints WHERE batchId = ? ORDER BY timestamp ASC'
-    ).all(batchId);
-
-    // Generate appropriate message (for checkpoint view - don't reveal safety status)
-    let message = '✅ Checkpoint data recorded successfully';
-
-    // Note: We don't reveal invalidation status to checkpoint operators
-    // Only pharmacist and consumer will see the safety status
-
     res.json({
       batchId,
       checkpoint,
       stickerColor: colorLower,
       temperature: detectedTemp,
       withinRange,
-      batchStatus: newStatus, // Internal use only
-      invalidationReason, // Internal use only
-      maxAllowedTemp: batch.optimalTempMax + 5,
-      message, // Generic success message - no safety details
+      batchStatus: newStatus, 
+      invalidationReason,
+      maxAllowedTemp: batch.optimalTempMax,
+      message: '✅ Checkpoint data recorded using Blockchain',
       dataRecorded: true,
-      // Don't include checkpoints or safety details for checkpoint view
-      // Those are only visible to pharmacist/consumer
+      blockchain: {
+        previousHash,
+        currentHash,
+        signature
+      }
     });
+
   } catch (error) {
     console.error('Error logging scan:', error);
     res.status(500).json({ error: 'Failed to log scan' });
@@ -596,7 +656,7 @@ app.get('/database/all', (req, res) => {
 
     // Get all checkpoints (including temperature)
     const checkpoints = db.prepare(`
-      SELECT c.*, b.medicineName, b.optimalTempMin, b.optimalTempMax
+      SELECT c.*, b.medicineName, b.manufacturer, b.optimalTempMin, b.optimalTempMax
       FROM checkpoints c 
       LEFT JOIN batches b ON c.batchId = b.batchId 
       ORDER BY c.timestamp DESC
@@ -604,7 +664,7 @@ app.get('/database/all', (req, res) => {
 
     // Get all tablets
     const tablets = db.prepare(`
-      SELECT t.*, b.medicineName, b.status as batchStatus 
+      SELECT t.*, b.medicineName, b.manufacturer, b.status as batchStatus 
       FROM tablets t 
       LEFT JOIN batches b ON t.batchId = b.batchId 
       ORDER BY t.createdAt DESC

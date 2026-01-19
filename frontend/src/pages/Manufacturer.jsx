@@ -6,6 +6,8 @@ export default function Manufacturer() {
   const navigate = useNavigate()
   const [formData, setFormData] = useState({
     medicineName: '',
+    manufacturer: '',
+    expiryDate: '',
     optimalTempMin: 2,
     optimalTempMax: 25
   })
@@ -20,6 +22,8 @@ export default function Manufacturer() {
     try {
       const batch = await createBatch({
         medicineName: formData.medicineName,
+        manufacturer: formData.manufacturer,
+        expiryDate: formData.expiryDate,
         optimalTempMin: Number(formData.optimalTempMin),
         optimalTempMax: Number(formData.optimalTempMax)
       })
@@ -59,6 +63,31 @@ export default function Manufacturer() {
                 value={formData.medicineName}
                 onChange={handleChange}
                 required
+              />
+            </div>
+
+            <div className="input-group">
+              <label htmlFor="manufacturer">Manufacturer Name</label>
+              <input
+                type="text"
+                id="manufacturer"
+                name="manufacturer"
+                className="input"
+                placeholder="e.g., PharmaGlobal Inc."
+                value={formData.manufacturer || ''}
+                onChange={handleChange}
+              />
+            </div>
+
+            <div className="input-group">
+              <label htmlFor="expiryDate">Expiry Date</label>
+              <input
+                type="date"
+                id="expiryDate"
+                name="expiryDate"
+                className="input"
+                value={formData.expiryDate || ''}
+                onChange={handleChange}
               />
             </div>
 
